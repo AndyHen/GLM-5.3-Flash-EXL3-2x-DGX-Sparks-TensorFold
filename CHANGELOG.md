@@ -136,8 +136,8 @@ Image unchanged: `v0.6.0-ae8d1c789b47`. No patch changes. The default checkpoint
 ### Changed
 - **Default checkpoint: [`Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold`](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold)** (rev `078455ff`), Mia's AI Lab's own EXL3
   quantization of GLM-5.3-Flash, Apache-2.0. Same format, size (~176 GB), speed and memory as TR3-4bpw. Against TR3-4bpw on
-  the same build: KL divergence to the original model 4-18% lower as served, on every test set (paired 95% intervals
-  exclude zero on 7 of 8); coding equal (HumanEval+ and MBPP+, thinking on: 469 vs 468 of 542, paired p = 1.0) with
+  the same build: KL divergence to Z.AI's official FP8 release 2-18% lower as served, on all six test sets (paired 95%
+  intervals exclude zero on all but chat); coding equal (HumanEval+ and MBPP+, thinking on: 469 vs 468 of 542, paired p = 1.0) with
   ~10% shorter replies; GSM8K 247 vs 245 of 250, HumanEval 157 vs 160 of 164 (neither significant). Details on its
   model card. TR3-4bpw stays pinned and one setting away: `MODEL_ID=Mia-AiLab/GLM-5.3-Flash-EXL3-TR3-4bpw`.
 - **Disk:** the first `./start.sh` after updating downloads the new checkpoint (~176 GB) and copies it to the worker.
