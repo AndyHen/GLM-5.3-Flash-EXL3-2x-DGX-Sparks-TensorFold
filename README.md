@@ -350,6 +350,10 @@ tok/s for four at once; prefill about the same (1-4% faster).
 Eight at once: +36% prose and +28% code over four. Replies identical to one at a time (11 of 11 staggered and in a
 burst), drafted == serial, the 195k needle right.
 
+An [independent TP3 C8/W32 qualification](docs/TP3_QUALIFICATION_20261003.md) records three-run decode results,
+a near-million-token cold/cached conversation, cancellation checks and startup/quality limits. Its profile and
+GPU clocks differ from the default measurements above; it is not a matched speedup or production certification.
+
 `DRY_RUN=1 ./start-tp3.sh` shows what would run (every rank's `docker run`, the links found, nothing stopped or
 started). It uses NCCL for every all-gather by default (`COMM=nccl`); `COMM=roce ./start-tp3.sh` sends the small
 ones over RoCE, each peer on the devices that share its subnet (the TP-N engine's RoCE; `TF_ROCE_HCA` lists a node's
