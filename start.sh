@@ -293,7 +293,7 @@ launch() {
   local rank0 rankw worker_cmd remote a i
   local -a here_cmd
   for (( i = TP - 1; i >= 1; i-- )); do
-    rankw=(tensorfold serve "$MODEL_ARG" --tp "$TP" --rank "$i" --master "$MASTER_ADDR" --master-port "$MASTER_PORT" "${SERVE_ARGS[@]}")
+    rankw=(tensorfold serve "$MODEL_ARG" --tp "$TP" --rank "$i" --master "${LINK_HEAD_ADDR[i]:-$MASTER_ADDR}" --master-port "$MASTER_PORT" "${SERVE_ARGS[@]}")
     log "Rank $i on $(worker_host "$i"): ${rankw[*]}"
     worker_cmd=(docker run -d --name "$CONTAINER_NAME" "${RUN_ARGS[@]}" "${ENV_ARGS[@]}"
                 $(rank_nccl_env "$i")
