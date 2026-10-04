@@ -95,7 +95,8 @@ checkpoint's ShapleyMcg attribution and the drafter's license).
   applied as contributed, with `tools/prompt_reuse.py`.
 - `0072-glm-display-kv` (`DISPLAY_KV_MIB`, the display reservation in the shared pool, issue #55): by
   [ezoushen](https://github.com/ezoushen), [pull request #56](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/pull/56),
-  applied as contributed, with `tools/display_kv_check.py`. It applies to TensorFold's pool the display-reserve KV
+  applied as contributed, with `tools/display_kv_check.py` (one review fix in its `start.sh` check, which ended a headless
+  Spark's start without a message). It applies to TensorFold's pool the display-reserve KV
   technique that [gabewillen](https://github.com/gabewillen) proposed for the vLLM kit in
   [MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks#234](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks/pull/234).
 - `0073-glm-queued-cancellation` (requests waiting for a slot are dropped when their client leaves): by

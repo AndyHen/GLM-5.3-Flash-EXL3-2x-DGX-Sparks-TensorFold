@@ -70,7 +70,10 @@ for v in SPLIT SHARED_PREFIX KDA_CHUNKED COPY_CODE MULTI_PREFILL STREAM_SMOOTH; 
 (( DISPLAY_KV_MIB == 0 || PARALLEL > 1 )) || die "DISPLAY_KV_MIB adds to the shared pool, which needs PARALLEL above 1"
 (( DISPLAY_KV_MIB == 0 )) || [[ -e /dev/dri/card0 ]] || die "DISPLAY_KV_MIB needs /dev/dri/card0, which this Spark lacks"
 if (( DISPLAY_KV_MIB )); then        # headless only: a monitor's framebuffer lives in the reservation
-  _shown=$(grep -lx connected /sys/class/drm/card0-*/status 2>/dev/null | sed 's|.*/\(card0-[^/]*\)/status|\1|' | paste -sd, -)
+  # no outputs under card0 at all: nvidia_drm runs without modeset, which has no dumb buffers for the span
+  compgen -G '/sys/class/drm/card0-*/status' >/dev/null ||
+    die "DISPLAY_KV_MIB needs nvidia_drm with modeset=1, and card0 shows no display outputs (an /etc/modprobe.d file may set modeset=0); set it to 0"
+  _shown=$(grep -lx connected /sys/class/drm/card0-*/status 2>/dev/null | sed 's|.*/\(card0-[^/]*\)/status|\1|' | paste -sd, - || true)
   [[ -z "$_shown" ]] || die "DISPLAY_KV_MIB is for headless Sparks, and $_shown has a display connected; set it to 0"
 fi
 [[ "$WORKER_WEIGHTS" == copy || "$WORKER_WEIGHTS" == nfs ]] || die "WORKER_WEIGHTS is copy or nfs, not $WORKER_WEIGHTS"
