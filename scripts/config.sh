@@ -139,6 +139,12 @@ export TF_GLM_COMM="$COMM"
 # TensorFold's is 256) also takes the 17-32-row verify windows of concurrent requests: code at 4 streams +1.4%, prose
 # +0.5-1% (two boots each). Same bits.
 export TF_ROCE_MAX_KB="${TF_ROCE_MAX_KB:-512}"
+# How long a RoCE all-gather waits for the other Spark before it fails, in seconds (patch 0052 reads it; 1 to 3600):
+# 300 here (the patch's own default is 20). Issue #54: on long prompts (~475k-500k tokens, or after many hours) a rank
+# failed after its 20 s while its own writes had all completed, i.e. the peer was late, not lost, and both Sparks went
+# down. A late peer now costs a slow round instead; a rank that is really gone is noticed after 300 s instead of 20,
+# like the watchdog's stall report (TF_GLM_MULTI_WATCHDOG_S, 300). NCCL's own gathers have no limit at all.
+export TF_ROCE_WAIT_S="${TF_ROCE_WAIT_S:-300}"
 # Prompt-lookup ("copy") drafts (patch 0007): when the reply's last 8 tokens occurred before, the tokens that followed
 # them are verified ahead of DFlash2's; quote / edit replies +5% (80.3 -> 84.4 tok/s), prose and code unchanged. Exact.
 COPY="${COPY:-1}"
@@ -247,6 +253,14 @@ export TENSORFOLD_MEMORY_RESERVE_GIB="$MEMORY_RESERVE_GIB"
 case "$TP" in 3) _pool=32 ;; *) _pool=12.5 ;; esac
 KV_POOL_GIB="${KV_POOL_GIB:-$_pool}"
 export TF_GLM_CACHE_GIB="$KV_POOL_GIB"
+# The display reservation in the pool (patch 0072, PARALLEL above 1): the GB10 firmware keeps ~2 GiB for a screen that
+# a headless Spark never uses and MemAvailable never counts. DISPLAY_KV_MIB of it (a multiple of 16, at most 2032;
+# 2048 failed ENOMEM in the vLLM kit's #234; 1792 measured here) joins the shared pool on every rank, on top of
+# KV_POOL_GIB, without taking host memory: 1792 adds ~277k tokens at PARALLEL=8 (276,480-278,528 with the pool's size).
+# Same replies, decode and prefill. Headless Sparks only: start.sh and each rank refuse it while a display is connected
+# to card0. Needs /dev/dri/card0 in the containers (nvidia_drm with modeset=1; --gpus all passes it). 0 (default): off.
+DISPLAY_KV_MIB="${DISPLAY_KV_MIB:-0}"
+export TF_GLM_DISPLAY_KV_MIB="$DISPLAY_KV_MIB"
 
 export TENSORFOLD_NO_UPDATE_CHECK="${TENSORFOLD_NO_UPDATE_CHECK:-1}"
 

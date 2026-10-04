@@ -90,6 +90,14 @@ checkpoint's ShapleyMcg attribution and the drafter's license).
   [SxMShaDoW](https://github.com/SxMShaDoW)), backported to v0.6.0.
 - `0060-glm-keep-thinking` (earlier turns keep their reasoning, `TF_GLM_CLEAR_THINKING`): by
   [kky42](https://github.com/kky42), pull request #23.
+- `0071-glm-shared-prefix-copy` (a shared system prompt's resume keeps the writer's kept prompt, issue #43): by
+  [ezoushen](https://github.com/ezoushen), [pull request #44](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/pull/44),
+  applied as contributed, with `tools/prompt_reuse.py`.
+- `0072-glm-display-kv` (`DISPLAY_KV_MIB`, the display reservation in the shared pool, issue #55): by
+  [ezoushen](https://github.com/ezoushen), [pull request #56](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/pull/56),
+  applied as contributed, with `tools/display_kv_check.py`. It applies to TensorFold's pool the display-reserve KV
+  technique that [gabewillen](https://github.com/gabewillen) proposed for the vLLM kit in
+  [MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks#234](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks/pull/234).
 - Every patch, except the parts credited above: by MiaAI-Lab, developed with
   [Claude Code](https://claude.com/claude-code), under the Apache License 2.0; the TensorFold code the patches modify or
   quote as context stays under TensorFold's licenses (Apache 2.0, and MIT for code written before v0.6.0; see

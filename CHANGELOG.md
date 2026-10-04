@@ -3,6 +3,38 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
+## v1.6 (unreleased): agent sessions keep their history beside sub-agents, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
+
+Image: not built yet (patches `23ba9d861151`, 72 patches); until it is published, `scripts/prepare.sh` builds it locally.
+
+### Fixed
+- **#43: a conversation lost its kept prompt whenever another conversation with the same system prompt resumed from
+  it** (patch `0071-glm-shared-prefix-copy`, by @ezoushen, #44). The resume took over the extent that held the shared
+  state and evicted the longer states in it, which belong to the conversation that wrote it, so a coding agent re-read
+  its whole history after each sub-agent request. The shared rows are now copied into free rows of their own; with no
+  free rows, or `TF_GLM_MULTI_LONE=1`, it behaves as before. Placement only: the same replies. Two Sparks, v1.5 +
+  0071, `tools/prompt_reuse.py` (new): 5% -> 99% of a ~33k-token turn resumed, 16.5 s -> 1.0 s to the first token
+  (measured by @ezoushen and @plotarmordev); the same replies, drafted == serial.
+- **#54: a RoCE all-gather failed on long prompts and took both Sparks down.** `TF_ROCE_WAIT_S` is now 300 s (was the
+  patch's 20): in the reports the failing rank's own writes had all completed, so the peer was late rather than lost.
+  A late peer now costs a slow round; a rank that is really gone is noticed after 300 s, like the watchdog's report.
+- **#36: with `SPLIT=1` a rank's first NCCL connection failed about half the time on some pairs** (NCCL error 2,
+  `ibv_reg_mr`: cannot allocate memory, before any weights load). `start.sh` now tries such a start once more as it
+  was, then starts with `SPLIT=0` (the same replies, long prompts fill slower) and says so.
+
+### Added
+- **`DISPLAY_KV_MIB`** (patch `0072-glm-display-kv`, by @ezoushen, #56; off by default): with `PARALLEL` above 1, up to
+  2032 MiB of the GB10's display reservation, which a headless Spark never uses and `MemAvailable` never counts, joins
+  the shared pool on every rank without taking host memory. Measured by @ezoushen at `PARALLEL=8`: 1792 MiB adds
+  276,480 tokens a boot (1,611,776 -> 1,992,704), the same reply hashes on and off, decode, prefill and the 195k
+  needle within boot-to-boot noise. Headless Sparks only: refused while a display is connected; fails closed.
+  `tools/display_kv_check.py` runs its checks in the image.
+
+### To do before release
+- Build and publish the image; pin its digest in `scripts/config.sh` and on this entry.
+- Two Sparks: concurrent == serial, drafted == serial, the 195k needle, `tools/prompt_reuse.py`, a boot with
+  `DISPLAY_KV_MIB=1792` (and one with `SPLIT=1`), and a 3-Spark start.
+
 ## v1.5 (2026-10-03): up to 8 requests at once (8 by default on three Sparks), serial requests stop when their client leaves
 
 Image: `v0.6.0-9f73cca659a1` (`sha256:ef83797d791fef96c4605e8d37367aca6de5aeac7bb672792cb682e2e55d4237`), 70 patches, for two and three Sparks.
