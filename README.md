@@ -90,6 +90,15 @@ prompt. Two Sparks therefore stay at 4 by default; three Sparks default to 8 ([3
 
 Details on the [model card](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold).
 
+### Independent Mac Studio / MCDMA qualification
+
+An independent community experiment extended the two-Spark setup with an M3 Ultra Mac Studio over
+[MCDMA](https://github.com/ashhart/MCDMA). Its best frozen one-request candidate reached 61.27 decode tok/s, but
+the 6.907 s median end-to-end time remained slower than this recipe's 6.776 s implied published C1 result. It is
+therefore documented as a reproducible transport and integration result, **not** as a performance win or a supported
+part of this recipe. See the [qualification note](docs/MCDMA_MAC_STUDIO_QUALIFICATION_20261004.md) and the
+[independent recipe](https://github.com/spenchey/GLM-5.3-Flash-MCDMA-2x-DGX-Sparks-Mac-Studio).
+
 ## Requirements
 
 - **Two DGX Sparks** (or two GB10 systems with 128 GB unified memory), with nothing else large on their GPUs: each
