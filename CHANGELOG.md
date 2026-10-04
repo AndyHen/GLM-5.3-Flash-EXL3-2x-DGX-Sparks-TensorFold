@@ -3,9 +3,9 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
-## v1.6 (unreleased): agent sessions keep their history beside sub-agents, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
+## v1.6 (unreleased): agent sessions keep their history (beside sub-agents and under a full pool), queued requests whose client left are dropped, no raw `<|assistant|>` in replies, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
 
-Image: not built yet (patches `23ba9d861151`, 72 patches); until it is published, `scripts/prepare.sh` builds it locally.
+Image: not built yet (patches `c4cab25d2d36`, 75 patches); until it is published, `scripts/prepare.sh` builds it locally.
 
 ### Fixed
 - **#43: a conversation lost its kept prompt whenever another conversation with the same system prompt resumed from
@@ -15,6 +15,23 @@ Image: not built yet (patches `23ba9d861151`, 72 patches); until it is published
   free rows, or `TF_GLM_MULTI_LONE=1`, it behaves as before. Placement only: the same replies. Two Sparks, v1.5 +
   0071, `tools/prompt_reuse.py` (new): 5% -> 99% of a ~33k-token turn resumed, 16.5 s -> 1.0 s to the first token
   (measured by @ezoushen and @plotarmordev); the same replies, drafted == serial.
+- **#61: two long conversations taking turns at a nearly full pool evicted each other's kept prompt** (patch
+  `0074-glm-compact-before-evict`, by @ezoushen, #62). A turn whose rows the pool had free, but not in one range,
+  evicted kept prompts until a range opened, and compacted only after evicting them all, so two coding agents at once
+  re-read 150-210K tokens of history (2-3 minutes). The pool now moves caches together first (each at most once) and
+  evicts only while its free rows fall short. Placement only: the same replies. `tools/pool_pressure.py`: the other
+  conversation's next turn 0% -> 100% resumed (measured by @ezoushen, two Sparks); `tools/pool_room_check.py` checks
+  the moves on a CPU arena.
+- **Requests waiting while every slot was busy kept waiting after their client left** (patch
+  `0073-glm-queued-cancellation`, by @desy0305, #51), until a slot freed; the scheduler now drops them at once, in
+  queue order. A reply whose connection fails mid-stream ends after the round instead of decoding on (the
+  delivery-failure handling from @johnwhited's #48). Measured by @desy0305 on two Sparks: a queued fifth / ninth
+  request cancelled with 4 / 8 slots busy was acknowledged in 0.11-0.21 s, the busy replies equal their serial ones,
+  `PARALLEL=1` unchanged; `tools/test_queued_cancellation.py` checks it on the CPU.
+- **#60: a raw `<|assistant|>` token reached replies** (patch `0075-glm-assistant-ends`; reported by
+  @Lukas-tek-no-logic). At high reasoning effort the model sometimes wrote it inside its answer and began a second
+  one; it now ends the reply, like the checkpoint's end tokens. `TF_GLM_ASSISTANT_ENDS=0` restores the old behaviour.
+  Replies without the token are unchanged.
 - **#54: a RoCE all-gather failed on long prompts and took both Sparks down.** `TF_ROCE_WAIT_S` is now 300 s (was the
   patch's 20): in the reports the failing rank's own writes had all completed, so the peer was late rather than lost.
   A late peer now costs a slow round; a rank that is really gone is noticed after 300 s, like the watchdog's report.

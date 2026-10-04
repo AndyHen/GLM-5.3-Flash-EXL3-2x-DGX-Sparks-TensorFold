@@ -14,7 +14,7 @@
 Serve **GLM-5.3-Flash** from two NVIDIA DGX Sparks (GB10, 128 GB each, linked by their ConnectX-7 ports) through an
 OpenAI-compatible API, with **4 concurrent requests**, the model's full **1,048,576-token context** and **image and
 video input**. It runs [TensorFold](https://github.com/ashhart/TensorFold) v0.6.0 on both Sparks (one rank on each)
-in NVIDIA's PyTorch container, plus 72 patches (65 of v1.4, 3 for 3 Sparks, experimental, 1 for up to 8 requests at once, 1 for stopping serial requests, 2 of v1.6 by [ezoushen](https://github.com/ezoushen): a shared system prompt keeps each conversation's history, the display reservation in the pool): DFlash2 and copy drafts, 4-bit dense weights, an FP8 KV cache,
+in NVIDIA's PyTorch container, plus 75 patches (65 of v1.4, 3 for 3 Sparks, experimental, 1 for up to 8 requests at once, 1 for stopping serial requests, 5 of v1.6: a shared system prompt keeps each conversation's history, the display reservation in the pool and the pool compacting before it evicts, by [ezoushen](https://github.com/ezoushen); queued requests whose client left dropped at once, by [desy0305](https://github.com/desy0305); `<|assistant|>` ending a reply): DFlash2 and copy drafts, 4-bit dense weights, an FP8 KV cache,
 faster prompt kernels, a one-shot RoCE all-gather between the Sparks, several requests over one shared cache pool,
 vision, tool calling, `/tokenize` and `/metrics`.
 
@@ -263,7 +263,8 @@ caches from **one shared pool**:
 
 Any one request can grow to the full window, and the four together share the pool: e.g. one 1M-token conversation
 next to one more of 1M, or next to three of ~640k. A request the pool cannot place yet waits until others finish (kept prompt states give way
-first); `/health` shows `pool_tokens`, `pool_free_tokens` and the streams decoding, filling and paused.
+first, least recently used first, and only while the free rows fall short: free rows in several ranges are gathered by
+moving caches instead, patch `0074`); `/health` shows `pool_tokens`, `pool_free_tokens` and the streams decoding, filling and paused.
 
 TensorFold's budget on each Spark is `MemAvailable` at start minus a host reserve (`MEMORY_RESERVE_GIB`, 14.5 GiB here;
 TensorFold's own default is a tenth of RAM). The server uses about 10 GiB beyond its own estimate at its peak, so the
@@ -416,6 +417,7 @@ sets a value wins: the environment, then `scripts/local.sh`, then `.env`, then t
 | `DENSE` | `q4` | the checkpoint's BF16 weights (attention, shared experts, dense layers, head): `q4` (4-bit groups of 64, the head in FP8, kv_b in BF16), `fp8` or `bf16`. **Non-English prompts:** `q4` can lose the end of turn on short French coding prompts (replies run to `max_tokens`, issue #18); `fp8` keeps it, at ~10% decode speed |
 | `DRAFTER` | `dflash2` | `dflash2`: IncoAI's DFlash2 drafter, licensed [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/), **non-commercial use only**; +5-10% decode. `mtp`: the checkpoint's own MTP head, one request at a time, which avoids that license (set it before the first `./start.sh` and DFlash2 is never downloaded) |
 | `TF_GLM_MTP` | `auto` | the checkpoint's MTP head beside DFlash2: `auto` leaves it out while DFlash2 drafts every request; `1` (TensorFold v0.6.0's own default) loads it, 1.77 GiB a Spark, with `PARALLEL=1`. `DRAFTER=mtp` always loads it |
+| `TF_GLM_ASSISTANT_ENDS` | `1` | `<\|assistant\|>` ends a reply, like `<\|user\|>` and `<\|observation\|>` (patch 0075, issue #60); `0`: only the checkpoint's own end tokens |
 | `DRAFT_POLICY` | `fnc7:0.3` | how many DFlash2 drafts a round verifies: up to 7, until the drafts' chance under the request's own sampling noise drops below 0.3 |
 | `COPY` / `COPY_MAX` | `1` / `15` | copy drafts: when the reply's last 8 tokens occurred before, the tokens that followed are verified ahead of DFlash2's, up to 15 a round |
 | `COPY_CODE` | `1` | 16-row verify windows as CUDA graphs, and copies from the reply itself only after a 16-token match |
@@ -533,6 +535,9 @@ applied with `patch -p0` in filename order); `start.sh` rebuilds or re-pulls the
 | 3 Sparks (experimental) | `0066-glm-tp-n`, `0067-glm-tp3-split-pad`, `0068-glm-tpn-split-buffer-rows` | the engine on 2 or 3 ranks (`--tp`): heads, expert columns, vocabulary and DFlash2 KV groups split in whole units, the remainder to the lowest ranks; the row split (`SPLIT`) and its early connection to every peer; RoCE all-gathers over per-peer routes (b12x's proxy modified for more than two Sparks); prompt buffers and the memory estimate hold the split's pad row at three ranks | [3 Sparks](#3-sparks-experimental); two Sparks unchanged |
 | Eight requests at once | `0069-glm-eight-streams` | up to 8 concurrent requests (`PARALLEL` 1 to 8): the batched verify window's segment tables (and the segmented kernels' launch grids) sized for the streams, four as before up to four; the multi-stream DFlash2 drafter, scheduler and memory estimate for 5 to 8 streams; the shared verify window's rows set by `TF_GLM_MULTI_WINDOW` (32 as before; 64 by default past 4 requests) and counted at start | 8 at once: +27% prose, +32% code over 4 on two Sparks (+36% / +28% on three); `PARALLEL` 1 to 4 unchanged ([Performance](#performance)) |
 | Serial stop | `0070-glm-serial-stop` | at `PARALLEL=1`, a request whose client left, or that hit a stop string or a gate cut, ends on both ranks after the same round (rank 0's stop rides on the round's sample all-gather; issue #38); `--parallel` above 1 without DFlash2 refused at start with the options | same replies |
+| Pool room | `0074-glm-compact-before-evict` | a request or a growing stream whose rows the pool has free, but not in one range, gets them by moving other caches (each at most once) instead of evicting kept prompts until a range opens; eviction only while the free rows fall short (by ezoushen, issue #61) | two conversations taking turns at a nearly full pool keep each other's kept state (`tools/pool_pressure.py`: the other's next turn 0% -> 100% resumed) |
+| Queued cancellation | `0073-glm-queued-cancellation` | a request waiting while every slot is busy, whose client left, is dropped at once instead of when a slot frees (the scheduler polls the waiting callers; only it removes them, so rank 1 never sees them); a reply whose client connection fails mid-stream ends after the round (delivery failures, after johnwhited's #48) (by desy0305, PR #51) | a ninth request cancelled with 8 slots busy: acknowledged in ~0.1-0.2 s; the busy replies unchanged (two Sparks, by desy0305) |
+| End of turn | `0075-glm-assistant-ends` | `<\|assistant\|>` ends a reply like the checkpoint's end tokens: the model sometimes started a second answer with it at high reasoning effort, and the raw token reached the reply's text (issue #60); `TF_GLM_ASSISTANT_ENDS=0` keeps the checkpoint's end tokens; the ranks check they agree at start | replies without the token unchanged |
 | Concurrent fill | `0062-glm-sliced-fill` | a new prompt's chunks run in layer slices (`FILL_BUDGET_MS`) with decode rounds between them, drafted as usual (`FILL_DRAFTS`), both ranks on the same layer boundaries; the chunk's buffers kept between slices, grouped fills, cache moves and cancellation mid-fill; whole forwards when nothing else decodes | with smooth streaming, the other replies' pauses during a 25k-token fill 630-690 ms -> 81-149 ms (table below) |
 
 Concurrent prompt fill and smooth streaming on two Sparks (`PARALLEL=4`, DFlash2, 1,024-row chunks): three 400-token
@@ -582,6 +587,9 @@ with [sparkDash](https://github.com/MiaAI-Lab/sparkDash) ([Performance](#perform
 | `tools/needle.py [label] [size]` | hides a passphrase in a ~195k-token prompt (the prompt comes out at ~0.8 x `size` tokens) and checks the model returns it |
 | `tools/toolcheck.py` | makes a tool call with an array parameter and checks it comes back as a JSON array |
 | `tools/display_kv_check.py [--gpu]` | patch 0072's checks, run in the image (`docker run ... --entrypoint python`, see the file): the setting, the span's mapping and unwinding through a fake driver, the carved planes and the pool's copies; with `--gpu`, the real span on a Spark whose display reservation is free |
+| `tools/pool_pressure.py [size]` | on a fresh server with nothing else sending requests: two conversations of ~`size` tokens (default 30000) take a turn each, others fill the pool, then each takes another turn; exit 1 when a turn resumes less than 90% of its previous prompt, 2 when the kept-prompt cap stops the fill first (a smaller pool runs it faster: `CONTEXT=131072 KV_POOL_GIB=0.5`) |
+| `tools/pool_room_check.py` | patch 0074's checks, run in the image (`docker run ... --entrypoint python`, see the file): the pool's room-making on a CPU arena, what it evicts and moves, and rank 1 replaying the same ops |
+| `tools/test_queued_cancellation.py --source-root DIR` | patch 0073's checks on the CPU, against TensorFold's source with the patches applied (no GPU, no server): requests that wait while every slot is busy and whose client leaves are dropped at once, in queue order; `--expect-stock` before 0073 shows the old wait |
 | `tools/end_of_turn.py [label] [max_cut]` | 8 short French coding prompts, thinking off: counts the replies that run to `max_tokens` (48 requests) and measures P(end of turn) right after each reply's closing code fence; exit 1 above `max_cut` cut replies (default 4) |
 | `tools/prompt_reuse.py [size]` | a ~33k-token conversation takes three more turns, each after a request of another conversation with the same system prompt (an agent and its sub-agents); exit 1 when a turn resumes less than 90% of its prompt. Needs `PARALLEL` above 1 |
 
@@ -595,7 +603,8 @@ scripts/      config.sh (all settings), local.sh.example (this setup's WORKER), 
               both Sparks), nodes.sh (ssh and the RoCE links), publish-image.sh (push the image to GHCR),
               banner.sh (start.sh's banner)
 patches/      patches baked into the image
-tools/        checks against the running server (needle, tool calls, end of turn, prompt reuse) and patch 0072's in the image
+tools/        checks against the running server (needle, tool calls, end of turn, prompt reuse, kept prompts under a
+              full pool) and patches 0072's, 0073's and 0074's checks
 CHANGELOG.md  what changed in each release
 CREDITS.md    who and what this builds on
 LICENSE       Apache License 2.0
