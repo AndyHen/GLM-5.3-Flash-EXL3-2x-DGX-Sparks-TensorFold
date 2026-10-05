@@ -106,6 +106,9 @@ checkpoint's ShapleyMcg attribution and the drafter's license).
 - `0074-glm-compact-before-evict` (the shared pool compacts before it evicts, issue #61): by
   [ezoushen](https://github.com/ezoushen), [pull request #62](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/pull/62)
   (contributed as 0073), applied as contributed, with `tools/pool_pressure.py` and `tools/pool_room_check.py`.
+- `0077-glm-kept-cap-shared-by-recency` (a new agent run keeps its system prompt's state once the kept-state cap is
+  full): the diagnosis, and the fix of evicting shared-prefix states by recency only, by
+  [meleesciony](https://github.com/meleesciony) in [issue #75](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/issues/75); the code is our own.
 - Every patch, except the parts credited above: by MiaAI-Lab, developed with
   [Claude Code](https://claude.com/claude-code), under the Apache License 2.0; the TensorFold code the patches modify or
   quote as context stays under TensorFold's licenses (Apache 2.0, and MIT for code written before v0.6.0; see
