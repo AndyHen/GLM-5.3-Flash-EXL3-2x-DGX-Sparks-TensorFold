@@ -3,6 +3,68 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
+## v1.6 (2026-10-05): agent sessions keep their history (beside sub-agents and under a full pool), queued requests whose client left are dropped, no raw `<|assistant|>` in replies, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
+
+Image: `v0.6.0-c4cab25d2d36` (`sha256:b47c19d66633f27cbe37da13fbc580363f466c08b9529feab1eecb1a4b904bf1`), 75 patches, for two and three Sparks.
+
+### Fixed
+- **#43: a conversation lost its kept prompt whenever another conversation with the same system prompt resumed from
+  it** (patch `0071-glm-shared-prefix-copy`, by @ezoushen, #44). The resume took over the extent that held the shared
+  state and evicted the longer states in it, which belong to the conversation that wrote it, so a coding agent re-read
+  its whole history after each sub-agent request. The shared rows are now copied into free rows of their own; with no
+  free rows, or `TF_GLM_MULTI_LONE=1`, it behaves as before. Placement only: the same replies. Two Sparks, v1.5 +
+  0071, `tools/prompt_reuse.py` (new): 5% -> 99% of a ~33k-token turn resumed, 16.5 s -> 1.0 s to the first token
+  (measured by @ezoushen and @plotarmordev); the same replies, drafted == serial.
+- **#61: two long conversations taking turns at a nearly full pool evicted each other's kept prompt** (patch
+  `0074-glm-compact-before-evict`, by @ezoushen, #62). A turn whose rows the pool had free, but not in one range,
+  evicted kept prompts until a range opened, and compacted only after evicting them all, so two coding agents at once
+  re-read 150-210K tokens of history (2-3 minutes). The pool now moves caches together first (each at most once) and
+  evicts only while its free rows fall short. Placement only: the same replies. `tools/pool_pressure.py`: the other
+  conversation's next turn 0% -> 100% resumed (measured by @ezoushen, two Sparks); `tools/pool_room_check.py` checks
+  the moves on a CPU arena.
+- **Requests waiting while every slot was busy kept waiting after their client left** (patch
+  `0073-glm-queued-cancellation`, by @desy0305, #51), until a slot freed; the scheduler now drops them at once, in
+  queue order. A reply whose connection fails mid-stream ends after the round instead of decoding on (the
+  delivery-failure handling from @johnwhited's #48). Measured by @desy0305 on two Sparks: a queued fifth / ninth
+  request cancelled with 4 / 8 slots busy was acknowledged in 0.11-0.21 s, the busy replies equal their serial ones,
+  `PARALLEL=1` unchanged; `tools/test_queued_cancellation.py` checks it on the CPU.
+- **#60: a raw `<|assistant|>` token reached replies** (patch `0075-glm-assistant-ends`; reported by
+  @Lukas-tek-no-logic). At high reasoning effort the model sometimes wrote it inside its answer and began a second
+  one; it now ends the reply, like the checkpoint's end tokens. `TF_GLM_ASSISTANT_ENDS=0` restores the old behaviour.
+  Replies without the token are unchanged.
+- **#54: a RoCE all-gather failed on long prompts and took both Sparks down.** `TF_ROCE_WAIT_S` is now 300 s (was the
+  patch's 20): in the reports the failing rank's own writes had all completed, so the peer was late rather than lost.
+  A late peer now costs a slow round; a rank that is really gone is noticed after 300 s, like the watchdog's report.
+- **#36: with `SPLIT=1` a rank's first NCCL connection failed about half the time on some pairs** (NCCL error 2,
+  `ibv_reg_mr`: cannot allocate memory, before any weights load). `start.sh` now tries such a start once more as it
+  was, then starts with `SPLIT=0` (the same replies, long prompts fill slower) and says so.
+
+### Added
+- **`DISPLAY_KV_MIB`** (patch `0072-glm-display-kv`, by @ezoushen, #56; off by default): with `PARALLEL` above 1, up to
+  2032 MiB of the GB10's display reservation, which a headless Spark never uses and `MemAvailable` never counts, joins
+  the shared pool on every rank without taking host memory. Measured by @ezoushen at `PARALLEL=8`: 1792 MiB adds
+  276,480 tokens a boot (1,611,776 -> 1,992,704), the same reply hashes on and off, decode, prefill and the 195k
+  needle within boot-to-boot noise. Headless Sparks only: refused while a display is connected; fails closed.
+  `tools/display_kv_check.py` runs its checks in the image.
+
+### Checked
+The published image on three Sparks (`./start-tp3.sh`, `PARALLEL=8`) and two (`./start.sh`), 2026-10-05, against v1.5:
+- Exact: 8 requests at once equal the same requests one at a time (11/11 staggered, 11/11 in a burst, three Sparks);
+  the 22 saved serial references byte-identical (two Sparks); drafted == serial 6/6 on three Sparks, two Sparks, the
+  small-pool start and `DENSE=fp8`; prefill hashes at 12k / 50k / 149k tokens as v1.5's; the 195k needle (both).
+- Speed as v1.5 (sparkDash, three Sparks, 1 / 4 / 8 at once): prose 65.7 / 121.8 / 162.8 tok/s (v1.5 65.7 / 121.8 /
+  166.0), code 100.0 / 164.3 / 210.1 (100.4 / 165.3 / 211.5); prefill unchanged.
+- #43: `tools/prompt_reuse.py` 5% -> 99% of each turn resumed (16.5 s -> 0.7-1.1 s), three and two Sparks.
+- #61: `tools/pool_pressure.py` (`CONTEXT=131072 KV_POOL_GIB=0.5`, `PARALLEL=8`): the other conversation's next turn
+  0% resumed (15.8 s) without 0074, 100% (0.6 s) with it.
+- #60: its request with `DENSE=fp8`: v1.5's reply carried `<|assistant|>` at character 1438 of 3,849; v1.6's ends
+  there, 1,438 characters, no marker, the same reasoning (534 tokens).
+- CPU tests as v1.5's plus the new ones (0071's resume, 0075's end tokens), 0073's and 0074's checks in the image; the
+  engine GPU tests have v1.5's 14 known failures and no new ones.
+- `DISPLAY_KV_MIB` was not measured here: these Sparks run `nvidia_drm` with `modeset=0` (an `/etc/modprobe.d`
+  override), and `start.sh` refuses it with that reason. @ezoushen's numbers are from modeset=1 Sparks.
+- The `start.sh` retry for #36 was checked offline (a harness with stubbed ranks), not against a real NCCL failure.
+
 ## v1.5 (2026-10-03): up to 8 requests at once (8 by default on three Sparks), serial requests stop when their client leaves
 
 Image: `v0.6.0-9f73cca659a1` (`sha256:ef83797d791fef96c4605e8d37367aca6de5aeac7bb672792cb682e2e55d4237`), 70 patches, for two and three Sparks.

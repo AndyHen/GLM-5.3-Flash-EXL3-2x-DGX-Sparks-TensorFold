@@ -65,6 +65,17 @@ check_workers
 [[ "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]] || die "MAX_TOKENS is a token count, not $MAX_TOKENS"
 [[ "$DRAFTER" == dflash2 || "$PARALLEL" == 1 ]] || die "PARALLEL=$PARALLEL needs DRAFTER=dflash2 (mtp serves one request at a time: PARALLEL=1)"
 for v in SPLIT SHARED_PREFIX KDA_CHUNKED COPY_CODE MULTI_PREFILL STREAM_SMOOTH; do [[ "${!v}" =~ ^[01]$ ]] || die "$v is 0 or 1, not ${!v}"; done
+[[ "$DISPLAY_KV_MIB" =~ ^(0|[1-9][0-9]{0,3})$ ]] && (( DISPLAY_KV_MIB % 16 == 0 && DISPLAY_KV_MIB <= 2032 )) ||
+  die "DISPLAY_KV_MIB is a multiple of 16 from 0 to 2032, not $DISPLAY_KV_MIB"
+(( DISPLAY_KV_MIB == 0 || PARALLEL > 1 )) || die "DISPLAY_KV_MIB adds to the shared pool, which needs PARALLEL above 1"
+(( DISPLAY_KV_MIB == 0 )) || [[ -e /dev/dri/card0 ]] || die "DISPLAY_KV_MIB needs /dev/dri/card0, which this Spark lacks"
+if (( DISPLAY_KV_MIB )); then        # headless only: a monitor's framebuffer lives in the reservation
+  # no outputs under card0 at all: nvidia_drm runs without modeset, which has no dumb buffers for the span
+  compgen -G '/sys/class/drm/card0-*/status' >/dev/null ||
+    die "DISPLAY_KV_MIB needs nvidia_drm with modeset=1, and card0 shows no display outputs (an /etc/modprobe.d file may set modeset=0); set it to 0"
+  _shown=$(grep -lx connected /sys/class/drm/card0-*/status 2>/dev/null | sed 's|.*/\(card0-[^/]*\)/status|\1|' | paste -sd, - || true)
+  [[ -z "$_shown" ]] || die "DISPLAY_KV_MIB is for headless Sparks, and $_shown has a display connected; set it to 0"
+fi
 [[ "$WORKER_WEIGHTS" == copy || "$WORKER_WEIGHTS" == nfs ]] || die "WORKER_WEIGHTS is copy or nfs, not $WORKER_WEIGHTS"
 DRY=0; [[ "${DRY_RUN:-0}" == 1 ]] && DRY=1
 [[ "$KV_POOL_GIB" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "KV_POOL_GIB is a number of GiB, not $KV_POOL_GIB"
@@ -278,9 +289,13 @@ fi
 # docker commands run over ssh, where this shell's environment does not reach. None of them is a secret. At TP>2,
 # TF_ROCE_HCA names a node's own devices, so each rank gets its own (scripts/nodes.sh, rank_nccl_env); at TP=2 it
 # passes as set, as in v1.4 (unset: the ranks take NCCL_IB_HCA's devices).
-ENV_ARGS=(-e HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}")
-_skip='^$'; (( TP == 2 )) || _skip='^TF_ROCE_HCA='
-while IFS='=' read -r name _; do ENV_ARGS+=(-e "$name=${!name}"); done < <(env | grep -E '^(TENSORFOLD|TF_GLM|TF_ROCE)_[A-Z0-9_]+=' | grep -v "$_skip" || true)
+env_args() {
+  local _skip='^$' name
+  ENV_ARGS=(-e HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}")
+  (( TP == 2 )) || _skip='^TF_ROCE_HCA='
+  while IFS='=' read -r name _; do ENV_ARGS+=(-e "$name=${!name}"); done < <(env | grep -E '^(TENSORFOLD|TF_GLM|TF_ROCE)_[A-Z0-9_]+=' | grep -v "$_skip" || true)
+}
+env_args
 RUN_ARGS=(--gpus all --ipc=host --network host --shm-size 16g --device /dev/infiniband --cap-add IPC_LOCK
           --ulimit memlock=-1 --ulimit stack=67108864)
 
@@ -369,7 +384,19 @@ fail() {
   done
   die "$1"
 }
-for attempt in 1 2; do
+# Issue #36: on some pairs a rank's first NCCL connection fails with SPLIT=1, seconds into the start and before any
+# weights load (NCCL error 2, ibv_reg_mr: Cannot allocate memory), about half the time; a start that comes up stays up.
+# Such a start is tried once more as it was, then with SPLIT=0 (prompt chunks unsplit: the same replies, long prompts
+# fill slower), and says so.
+split_nccl_failed() {
+  local i
+  [[ "$SPLIT" == 1 ]] || return 1
+  { docker logs "$CONTAINER_NAME" 2>&1 || true
+    for i in $(worker_ids); do worker "$i" docker logs "$CONTAINER_NAME" 2>&1 || true; done
+  } | grep 'NCCL error 2: unhandled system error' >/dev/null      # not -q: an early exit fails the pipe (pipefail)
+}
+split_tries=0; refitted=0
+for attempt in 1 2 3 4; do
   if (( TP == 2 )); then step 3 "Launch: container $CONTAINER_NAME, rank 1 on $WORKER, then rank 0 here"
   else step 3 "Launch: container $CONTAINER_NAME, ranks $((TP - 1)) to 1 on the workers, then rank 0 here"; fi
   launch
@@ -381,20 +408,23 @@ for attempt in 1 2; do
   # docker logs is the background job, so killing it ends the whole pipeline (no orphaned `docker logs -f`)
   docker logs -f "$CONTAINER_NAME" > >(grep --line-buffered -v -E "$NOISE" | sed -u "s/^/  ${D}│${R} /") 2>&1 &
   LOGS_PID=$!
-  start=$SECONDS; next_beat=15; refit=""
+  start=$SECONDS; next_beat=15; refit=""; retry=""
   until curl -sf --max-time 5 "$URL/v1/models" >/dev/null 2>&1; do
     if ! running_here; then
       # the memory at this start holds a smaller window than asked: once, take the largest one TensorFold names
       refit=$(docker logs "$CONTAINER_NAME" 2>&1 | sed -n 's/.*largest fitting prompt-plus-reply window: \([0-9]*\) tokens.*/\1/p' | tail -1)
-      [[ -n "$refit" && $attempt == 1 ]] && break
+      [[ -n "$refit" && $refitted == 0 ]] && break
+      refit=""
+      (( split_tries < 2 )) && split_nccl_failed && { retry=split; break; }
       fail "rank 0 exited (code $(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER_NAME")) before it was ready"
     fi
     (( SECONDS - start < WAIT_TIMEOUT )) ||
       fail "not ready after ${WAIT_TIMEOUT}s (WAIT_TIMEOUT); the ranks are still running: docker logs -f $CONTAINER_NAME"
     if (( SECONDS - start >= next_beat )); then
       for i in $(worker_ids); do
-        running_worker "$i" ||
-          fail "rank $i on $(worker_host "$i") exited (code $(worker "$i" docker inspect -f '{{.State.ExitCode}}' "$CONTAINER_NAME" 2>/dev/null || echo "?")) before the server was ready"
+        running_worker "$i" && continue
+        (( split_tries < 2 )) && split_nccl_failed && { retry=split; break 2; }
+        fail "rank $i on $(worker_host "$i") exited (code $(worker "$i" docker inspect -f '{{.State.ExitCode}}' "$CONTAINER_NAME" 2>/dev/null || echo "?")) before the server was ready"
       done
       estimate=$(docker logs "$CONTAINER_NAME" 2>&1 | sed -n 's/.*startup estimate \([0-9.]*\) GiB.*/\1/p' | tail -1)
       there=""
@@ -410,7 +440,21 @@ for attempt in 1 2; do
   done
   kill $LOGS_PID 2>/dev/null || true
   sleep 0.3
+  if [[ "$retry" == split ]]; then
+    split_tries=$((split_tries + 1))
+    if (( split_tries == 1 )); then
+      warn "a rank's first NCCL connection failed with SPLIT=1 (NCCL error 2, issue #36): starting again as it was"
+    else
+      warn "it failed again: starting with SPLIT=0 (prompt chunks unsplit: the same replies, long prompts fill slower); SPLIT=0 in .env skips these tries (issue #36)"
+      SPLIT=0
+      export TF_GLM_HC_SPLIT=0 TF_GLM_PREFILL_OVERLAP=0
+      env_args
+    fi
+    ./stop.sh >/dev/null
+    continue
+  fi
   [[ -z "$refit" ]] && break
+  refitted=1
   warn "this start's memory budget holds a ${refit}-token window, not $(arg_value --context): starting again with --context $refit"
   CONTEXT=$refit
   SERVE_ARGS+=(--context "$refit")
