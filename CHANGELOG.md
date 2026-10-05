@@ -3,7 +3,7 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
-## v1.6 (unreleased): agent sessions keep their history (beside sub-agents and under a full pool), queued requests whose client left are dropped, no raw `<|assistant|>` in replies, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
+## v1.6 (2026-10-05): agent sessions keep their history (beside sub-agents and under a full pool), queued requests whose client left are dropped, no raw `<|assistant|>` in replies, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
 
 Image: `v0.6.0-c4cab25d2d36` (`sha256:b47c19d66633f27cbe37da13fbc580363f466c08b9529feab1eecb1a4b904bf1`), 75 patches, for two and three Sparks.
 
