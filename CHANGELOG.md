@@ -3,10 +3,9 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
-## Unreleased
+## v1.7.1 (2026-10-05): a new agent run resumes its system prompt again once the kept cap is full
 
-Image: not published yet; `prepare.sh` builds it locally from the 76 patches (the patches' hash no longer matches the
-pinned `v0.6.0-c4cab25d2d36` until a new image is published and pinned).
+Image: `v0.6.0-1692d2df78d2` (`sha256:a8067cd7e14c14fa83d1dbed60261428f6d1737cec4554445573354af040dd7c`), 76 patches, for two and three Sparks (v1.7's image plus `0077`).
 
 ### Fixed
 - **#75, a new run of an agent no longer resumed its system prompt once the kept cap was full** (patch
