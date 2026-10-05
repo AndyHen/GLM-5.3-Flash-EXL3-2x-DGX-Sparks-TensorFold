@@ -318,12 +318,18 @@ Everything else (drafts, the window, NFS, 3 Sparks) works the same. The reposito
 1. Open [its page on Hugging Face](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit), log in and
    agree to its terms.
 2. With the same account, create a token with read access at <https://huggingface.co/settings/tokens>.
-3. Set both in `scripts/local.sh` (or `.env`, unless `scripts/local.sh` sets `ABLIT` too: it wins), and run `./start.sh restart` (`./start-tp3.sh restart` on 3 Sparks):
+3. Set them in `scripts/local.sh` (or `.env`, unless `scripts/local.sh` sets `ABLIT` too: it wins), and run
+   `./start.sh restart` (`./start-tp3.sh restart` on 3 Sparks):
 
    ```bash
    ABLIT=1
    HF_TOKEN=hf_...
+   THINKING=0      # best results with the Ablit weights (below)
    ```
+
+**For best results, run the Ablit weights with thinking off:** `THINKING=0` beside `ABLIT=1` makes the server answer
+directly unless a request asks to think. Per request, `"reasoning_effort": "none"` (or
+`"chat_template_kwargs": {"enable_thinking": false}`) does the same ([Thinking and sampling](#thinking-and-sampling)).
 
 Without `HF_TOKEN`, `start.sh`, `start-tp3.sh` and `prepare.sh` stop at once and say what to do. Before the image
 and the download, `prepare.sh` also checks that the token reaches the gated files: a `401` means Hugging Face does not
