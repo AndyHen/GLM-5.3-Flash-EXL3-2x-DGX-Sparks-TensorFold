@@ -112,7 +112,7 @@ Details on the [model card](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-
   and checks the worker for what the copy must send. With `WORKER_WEIGHTS=nfs` the worker needs only the image
   ([Worker weights over NFS](#worker-weights-over-nfs)).
 - Optional: the `hf` CLI on the head (faster download) and a Hugging Face token (`~/.cache/huggingface/token` or
-  `HF_TOKEN`).
+  `HF_TOKEN`). `HF_TOKEN` is required for the gated Ablit weights (`ABLIT=1`, [Ablit weights](#ablit-weights)).
 
 ## Quick start
 
@@ -308,6 +308,36 @@ checks that the worker sees every file of both snapshots as the head has them, i
 exported path as the worker mounts it (default: the head's `HF_CACHE`; `/` for an NFSv4 export with `fsid=0`), and
 `NFS_SERVER` the head's address (default: its address on the link).
 
+## Ablit weights
+
+`ABLIT=1` serves
+[Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit)
+instead of the published checkpoint: the same checkpoint, abliterated, at the revision pinned in `scripts/config.sh`.
+Everything else (drafts, the window, NFS, 3 Sparks) works the same. The repository is gated:
+
+1. Open [its page on Hugging Face](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit), log in and
+   agree to its terms.
+2. With the same account, create a token with read access at <https://huggingface.co/settings/tokens>.
+3. Set them in `scripts/local.sh` (or `.env`, unless `scripts/local.sh` sets `ABLIT` too: it wins), and run
+   `./start.sh restart` (`./start-tp3.sh restart` on 3 Sparks):
+
+   ```bash
+   ABLIT=1
+   HF_TOKEN=hf_...
+   ```
+
+**Thinking is off by default with the Ablit weights**, which give their best results that way: with `ABLIT=1`,
+`THINKING` defaults to `0`, so the server answers directly unless a request asks to think (`"reasoning_effort"`, or
+`"chat_template_kwargs": {"enable_thinking": true}`; [Thinking and sampling](#thinking-and-sampling)). `THINKING=1`
+turns it back on by default.
+
+Without `HF_TOKEN`, `start.sh`, `start-tp3.sh` and `prepare.sh` stop at once and say what to do. Before the image
+and the download, `prepare.sh` also checks that the token reaches the gated files: a `401` means Hugging Face does not
+accept the token, a `403` that its account has not agreed to the terms yet (or that a fine-grained token lacks read
+access to public gated repositories). The first start downloads the Ablit checkpoint (~176 GB, beside the
+published one in the cache) and, with `WORKER_WEIGHTS=copy`, copies it to the worker. `ABLIT=0` goes back to the
+published checkpoint, which stays in the cache.
+
 ## 3 Sparks (experimental)
 
 `./start-tp3.sh` runs the same recipe as tensor parallel over three Sparks (`TP=3` with `./start.sh`'s options;
@@ -415,6 +445,7 @@ sets a value wins: the environment, then `scripts/local.sh`, then `.env`, then t
 | `KV_POOL_GIB` / `MEMORY_RESERVE_GIB` | `12.5` (`32` at `TP=3`) / `14.5`, plus ~0.95 a request past 4 and ~0.04 a window row past 32 (`19.6` at 8 requests and 64 rows) | the shared pool beyond the window (kept prompts, more long conversations at once) grows into what is free at start minus the reserve, up to `KV_POOL_GIB` GiB a Spark; the reserve sets the lowest free memory on the head (~4.5-5 GiB under a 1M-token prompt); it grows with `PARALLEL` because more requests at once take more than the startup estimate counts; raise it when other work shares the Sparks |
 | `DISPLAY_KV_MIB` | `0` (off) | MiB of the GPU's display reservation added to the shared pool on every rank (patch 0072, `PARALLEL` above 1; a multiple of 16 up to 2032, 1792 measured): pool tokens without host memory, on top of `KV_POOL_GIB`; needs `/dev/dri/card0`; headless Sparks only (refused while a display is connected) |
 | `DENSE` | `q4` | the checkpoint's BF16 weights (attention, shared experts, dense layers, head): `q4` (4-bit groups of 64, the head in FP8, kv_b in BF16), `fp8` or `bf16`. **Non-English prompts:** `q4` can lose the end of turn on short French coding prompts (replies run to `max_tokens`, issue #18); `fp8` keeps it, at ~10% decode speed |
+| `ABLIT` | `0` | `1`: serve the gated [Ablit weights](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit) instead of the published checkpoint; needs `HF_TOKEN` and the terms accepted on the model's page; thinking defaults to off ([Ablit weights](#ablit-weights)) |
 | `DRAFTER` | `dflash2` | `dflash2`: IncoAI's DFlash2 drafter, licensed [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/), **non-commercial use only**; +5-10% decode. `mtp`: the checkpoint's own MTP head, one request at a time, which avoids that license (set it before the first `./start.sh` and DFlash2 is never downloaded) |
 | `TF_GLM_MTP` | `auto` | the checkpoint's MTP head beside DFlash2: `auto` leaves it out while DFlash2 drafts every request; `1` (TensorFold v0.6.0's own default) loads it, 1.77 GiB a Spark, with `PARALLEL=1`. `DRAFTER=mtp` always loads it |
 | `TF_GLM_ASSISTANT_ENDS` | `1` | `<\|assistant\|>` ends a reply, like `<\|user\|>` and `<\|observation\|>` (patch 0075, issue #60); `0`: only the checkpoint's own end tokens |
@@ -423,7 +454,7 @@ sets a value wins: the environment, then `scripts/local.sh`, then `.env`, then t
 | `COPY_CODE` | `1` | 16-row verify windows as CUDA graphs, and copies from the reply itself only after a 16-token match |
 | `SHARED_PREFIX` | `1` | conversations that share a system prompt reuse its prompt state |
 | `MAX_TOKENS` | `32768` | the reply budget (reasoning and answer) of a request that sets no `max_tokens`; TensorFold's own default is 4,096 |
-| `THINKING` | `1` | think before answering by default; `0` answers directly unless a request asks to think |
+| `THINKING` | `1` (`0` with `ABLIT=1`) | think before answering by default; `0` answers directly unless a request asks to think |
 | `VISION` / `VISION_URLS` | `1` / `0` | image and video input; `1` also accepts public `https://` URLs |
 | `COMM` | `roce` | the ranks' small all-gathers as one-shot RDMA writes over the RoCE link; `nccl`: NCCL for all |
 | `SPLIT` | `1` | prompt chunks' hyper-connection work split between the Sparks, its exchanges overlapped with the next rows' work; when a rank's first NCCL connection fails with it (NCCL error 2, issue #36), `start.sh` tries once more, then starts with `SPLIT=0` and says so |
@@ -599,7 +630,7 @@ with [sparkDash](https://github.com/MiaAI-Lab/sparkDash) ([Performance](#perform
 start.sh      set up (first run) and start both ranks
 start-tp3.sh  the same on three Sparks (experimental, patches 0066-0068)
 stop.sh       stop them
-scripts/      config.sh (all settings), local.sh.example (this setup's WORKER), prepare.sh (image + checkpoint on
+scripts/      config.sh (all settings), local.sh.example (this setup's WORKER, ABLIT), prepare.sh (image + checkpoint on
               both Sparks), nodes.sh (ssh and the RoCE links), publish-image.sh (push the image to GHCR),
               banner.sh (start.sh's banner)
 patches/      patches baked into the image

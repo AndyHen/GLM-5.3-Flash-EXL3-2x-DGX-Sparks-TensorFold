@@ -47,13 +47,22 @@ fi
 MASTER_ADDR="${MASTER_ADDR:-$_ma}"
 SOCKET_IFNAME="${SOCKET_IFNAME:-}"
 
-MODEL_ID="${MODEL_ID:-Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold}"   # EXL3 routed experts (4 bpw), BF16 elsewhere
+# ABLIT=1 serves the Ablit weights, Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit (the same checkpoint,
+# abliterated; README "Ablit weights"), instead of the published checkpoint; 0 (default) the published one. The Ablit
+# repository is gated: HF_TOKEN must be set (a Hugging Face access token whose account accepted the terms on the
+# model's page), or prepare.sh, start.sh and start-tp3.sh stop and say so. Switching downloads the other checkpoint
+# (~176 GB). With ABLIT=1, THINKING defaults to 0 (below).
+ABLIT="${ABLIT:-0}"
+ABLIT_ID="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit"
+_id="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold"; [[ "$ABLIT" == 1 ]] && _id=$ABLIT_ID
+MODEL_ID="${MODEL_ID:-$_id}"   # EXL3 routed experts (4 bpw), BF16 elsewhere
 # The checkpoint's revision (a Hugging Face commit sha; DFLASH2_REVISION below is DFlash2's): the one this recipe was
 # measured with. prepare.sh downloads exactly it, start.sh serves that snapshot from the local cache (no network), and
-# a new upstream commit changes nothing here until the pin does. Empty: the Hub's main when first downloaded. The pin
-# belongs to the checkpoint above; another MODEL_ID gets no pin unless you set one.
+# a new upstream commit changes nothing here until the pin does. Empty: the Hub's main when first downloaded. The pins
+# belong to the checkpoints above; another MODEL_ID gets no pin unless you set one.
 case "$MODEL_ID" in
   Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold) _rev=078455ffe6472f9a52fbc1139f58b9db2881b25c ;;
+  Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit) _rev=57edefd2f5d9b371c8345883304d5af68b52fa24 ;;
   *) _rev="" ;;
 esac
 MODEL_REVISION="${MODEL_REVISION-$_rev}"
@@ -116,7 +125,10 @@ CONTEXT="${CONTEXT:-$_ctx}"
 DFLASH2_ID="${DFLASH2_ID:-incoai/GLM-5.3-Flash-DFlash2}"
 _rev=""; [[ "$DFLASH2_ID" == incoai/GLM-5.3-Flash-DFlash2 ]] && _rev=bf582e4eacc1810f76656d1811693ff6c6737d2a
 DFLASH2_REVISION="${DFLASH2_REVISION-$_rev}"   # DFlash2's pinned revision, as MODEL_REVISION above
-THINKING="${THINKING:-1}"
+# Think before answering by default (0: answer directly unless a request asks to think); off by default with the Ablit
+# weights (ABLIT=1), which give their best results without thinking
+_think=1; [[ "$MODEL_ID" == "$ABLIT_ID" ]] && _think=0
+THINKING="${THINKING:-$_think}"
 # The reply budget of a request that sets no max_tokens (or max_completion_tokens), reasoning and answer together:
 # 32768. GLM thinks at Max by default, and TensorFold's own 4,096 could end a reply inside a tool call (an agent such
 # as Codex sets none). A request's own value wins; this one is cut to what the window has left, never refused.
@@ -298,6 +310,18 @@ log()  { printf '%s[%s]%s %s\n' "$(_c 1 '1;36')" "$(basename "$0")" "$(_c 1 0)" 
 warn() { printf '%s[%s] WARN:%s %s\n' "$(_c 2 '1;33')" "$(basename "$0")" "$(_c 2 0)" "$*" >&2; }
 die()  { printf '%s[%s] ERROR:%s %s\n' "$(_c 2 '1;31')" "$(basename "$0")" "$(_c 2 0)" "$*" >&2; exit 1; }
 
+# HF_TOKEN from scripts/local.sh reaches the hf CLI and the download container only when exported
+[[ -z "${HF_TOKEN:-}" ]] || export HF_TOKEN
+# need_hf_token: stop before anything else when the checkpoint is the gated Ablit one (ABLIT=1) and HF_TOKEN is not set
+need_hf_token() {
+  [[ "$ABLIT" =~ ^[01]$ ]] || die "ABLIT is 0 or 1, not $ABLIT"
+  [[ "$MODEL_ID" == "$ABLIT_ID" && -z "${HF_TOKEN:-}" ]] || return 0
+  die "The Ablit weights ($ABLIT_ID, ABLIT=1) are gated on Hugging Face.
+    1. Open https://huggingface.co/$ABLIT_ID, log in and agree to its terms.
+    2. Create a token with read access at https://huggingface.co/settings/tokens (the same account).
+    3. Set HF_TOKEN=hf_... in scripts/local.sh, in .env or in the environment, and run this again.
+    Or set ABLIT=0 to serve the published checkpoint."
+}
 model_cache_dir() { local id=${1:-$MODEL_ID}; echo "$HF_CACHE/hub/models--${id//\//--}"; }
 # model_revision <id>: the pinned revision of MODEL_ID or DFLASH2_ID (empty: none, the cache's refs/main counts)
 model_revision() { if [[ "$1" == "$MODEL_ID" ]]; then echo "$MODEL_REVISION"; elif [[ "$1" == "$DFLASH2_ID" ]]; then echo "$DFLASH2_REVISION"; fi; }
