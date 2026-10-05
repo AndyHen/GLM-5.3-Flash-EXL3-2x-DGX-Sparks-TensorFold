@@ -51,7 +51,7 @@ SOCKET_IFNAME="${SOCKET_IFNAME:-}"
 # abliterated; README "Ablit weights"), instead of the published checkpoint; 0 (default) the published one. The Ablit
 # repository is gated: HF_TOKEN must be set (a Hugging Face access token whose account accepted the terms on the
 # model's page), or prepare.sh, start.sh and start-tp3.sh stop and say so. Switching downloads the other checkpoint
-# (~176 GB).
+# (~176 GB). With ABLIT=1, THINKING defaults to 0 (below).
 ABLIT="${ABLIT:-0}"
 ABLIT_ID="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit"
 _id="Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold"; [[ "$ABLIT" == 1 ]] && _id=$ABLIT_ID
@@ -125,7 +125,10 @@ CONTEXT="${CONTEXT:-$_ctx}"
 DFLASH2_ID="${DFLASH2_ID:-incoai/GLM-5.3-Flash-DFlash2}"
 _rev=""; [[ "$DFLASH2_ID" == incoai/GLM-5.3-Flash-DFlash2 ]] && _rev=bf582e4eacc1810f76656d1811693ff6c6737d2a
 DFLASH2_REVISION="${DFLASH2_REVISION-$_rev}"   # DFlash2's pinned revision, as MODEL_REVISION above
-THINKING="${THINKING:-1}"
+# Think before answering by default (0: answer directly unless a request asks to think); off by default with the Ablit
+# weights (ABLIT=1), which give their best results without thinking
+_think=1; [[ "$MODEL_ID" == "$ABLIT_ID" ]] && _think=0
+THINKING="${THINKING:-$_think}"
 # The reply budget of a request that sets no max_tokens (or max_completion_tokens), reasoning and answer together:
 # 32768. GLM thinks at Max by default, and TensorFold's own 4,096 could end a reply inside a tool call (an agent such
 # as Codex sets none). A request's own value wins; this one is cut to what the window has left, never refused.

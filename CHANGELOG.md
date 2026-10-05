@@ -15,6 +15,8 @@ Image: `v0.6.0-c4cab25d2d36` (`sha256:b47c19d66633f27cbe37da13fbc580363f466c08b9
   get one and accept the terms on the model's page, and `prepare.sh` checks that the token reaches the gated files
   before the image and the download (README: Ablit weights), without putting the token on a command line. `HF_TOKEN`
   set in `scripts/local.sh` is now exported to the download.
+- **With `ABLIT=1`, thinking is off by default** (`THINKING` defaults to `0`): the Ablit weights give their best
+  results answering directly. A request can still ask to think, and `THINKING=1` turns it back on by default.
 
 ## v1.6 (2026-10-05): agent sessions keep their history (beside sub-agents and under a full pool), queued requests whose client left are dropped, no raw `<|assistant|>` in replies, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
 
