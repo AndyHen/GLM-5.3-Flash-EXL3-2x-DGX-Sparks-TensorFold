@@ -3,6 +3,19 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
+## v1.7 (2026-10-05): the Ablit weights (`ABLIT=1`, gated: needs `HF_TOKEN`)
+
+Image: `v0.6.0-c4cab25d2d36` (`sha256:b47c19d66633f27cbe37da13fbc580363f466c08b9529feab1eecb1a4b904bf1`), 75 patches, for two and three Sparks (unchanged from v1.6).
+
+### Added
+- **`ABLIT=1` serves the Ablit weights**,
+  [Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit)
+  (pinned at `57edefd2`), instead of the published checkpoint; set it in `scripts/local.sh` (now in `local.sh.example`) or `.env`.
+  The repository is gated: `start.sh`, `start-tp3.sh` and `prepare.sh` stop when `HF_TOKEN` is not set and say how to
+  get one and accept the terms on the model's page, and `prepare.sh` checks that the token reaches the gated files
+  before the image and the download (README: Ablit weights), without putting the token on a command line. `HF_TOKEN`
+  set in `scripts/local.sh` is now exported to the download.
+
 ## v1.6 (2026-10-05): agent sessions keep their history (beside sub-agents and under a full pool), queued requests whose client left are dropped, no raw `<|assistant|>` in replies, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
 
 Image: `v0.6.0-c4cab25d2d36` (`sha256:b47c19d66633f27cbe37da13fbc580363f466c08b9529feab1eecb1a4b904bf1`), 75 patches, for two and three Sparks.
