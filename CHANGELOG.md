@@ -5,7 +5,7 @@ Every change to this recipe, newest first. Each release names the image it serve
 
 ## v1.6 (unreleased): agent sessions keep their history (beside sub-agents and under a full pool), queued requests whose client left are dropped, no raw `<|assistant|>` in replies, the display reservation in the pool, a longer RoCE wait, SPLIT retried at start
 
-Image: not built yet (patches `c4cab25d2d36`, 75 patches); until it is published, `scripts/prepare.sh` builds it locally.
+Image: `v0.6.0-c4cab25d2d36` (`sha256:b47c19d66633f27cbe37da13fbc580363f466c08b9529feab1eecb1a4b904bf1`), 75 patches, for two and three Sparks.
 
 ### Fixed
 - **#43: a conversation lost its kept prompt whenever another conversation with the same system prompt resumed from
@@ -47,10 +47,23 @@ Image: not built yet (patches `c4cab25d2d36`, 75 patches); until it is published
   needle within boot-to-boot noise. Headless Sparks only: refused while a display is connected; fails closed.
   `tools/display_kv_check.py` runs its checks in the image.
 
-### To do before release
-- Build and publish the image; pin its digest in `scripts/config.sh` and on this entry.
-- Two Sparks: concurrent == serial, drafted == serial, the 195k needle, `tools/prompt_reuse.py`, a boot with
-  `DISPLAY_KV_MIB=1792` (and one with `SPLIT=1`), and a 3-Spark start.
+### Checked
+The published image on three Sparks (`./start-tp3.sh`, `PARALLEL=8`) and two (`./start.sh`), 2026-10-05, against v1.5:
+- Exact: 8 requests at once equal the same requests one at a time (11/11 staggered, 11/11 in a burst, three Sparks);
+  the 22 saved serial references byte-identical (two Sparks); drafted == serial 6/6 on three Sparks, two Sparks, the
+  small-pool start and `DENSE=fp8`; prefill hashes at 12k / 50k / 149k tokens as v1.5's; the 195k needle (both).
+- Speed as v1.5 (sparkDash, three Sparks, 1 / 4 / 8 at once): prose 65.7 / 121.8 / 162.8 tok/s (v1.5 65.7 / 121.8 /
+  166.0), code 100.0 / 164.3 / 210.1 (100.4 / 165.3 / 211.5); prefill unchanged.
+- #43: `tools/prompt_reuse.py` 5% -> 99% of each turn resumed (16.5 s -> 0.7-1.1 s), three and two Sparks.
+- #61: `tools/pool_pressure.py` (`CONTEXT=131072 KV_POOL_GIB=0.5`, `PARALLEL=8`): the other conversation's next turn
+  0% resumed (15.8 s) without 0074, 100% (0.6 s) with it.
+- #60: its request with `DENSE=fp8`: v1.5's reply carried `<|assistant|>` at character 1438 of 3,849; v1.6's ends
+  there, 1,438 characters, no marker, the same reasoning (534 tokens).
+- CPU tests as v1.5's plus the new ones (0071's resume, 0075's end tokens), 0073's and 0074's checks in the image; the
+  engine GPU tests have v1.5's 14 known failures and no new ones.
+- `DISPLAY_KV_MIB` was not measured here: these Sparks run `nvidia_drm` with `modeset=0` (an `/etc/modprobe.d`
+  override), and `start.sh` refuses it with that reason. @ezoushen's numbers are from modeset=1 Sparks.
+- The `start.sh` retry for #36 was checked offline (a harness with stubbed ranks), not against a real NCCL failure.
 
 ## v1.5 (2026-10-03): up to 8 requests at once (8 by default on three Sparks), serial requests stop when their client leaves
 
