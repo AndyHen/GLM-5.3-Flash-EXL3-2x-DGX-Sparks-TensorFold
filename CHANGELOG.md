@@ -3,6 +3,20 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
+## v1.7.1 (2026-10-05): a new agent run resumes its system prompt again once the kept cap is full
+
+Image: `v0.6.0-1692d2df78d2` (`sha256:a8067cd7e14c14fa83d1dbed60261428f6d1737cec4554445573354af040dd7c`), 76 patches, for two and three Sparks (v1.7's image plus `0077`).
+
+### Fixed
+- **#75, a new run of an agent no longer resumed its system prompt once the kept cap was full** (patch
+  `0077-glm-kept-cap-shared-by-recency`; diagnosed, and the fix proposed, by @meleesciony). Since `0071` every run and
+  every cold start keeps its states in an extent of its own, and `0063` never dropped an extent's latest state while
+  anything superseded was kept anywhere. Within hours of a start every entry was some conversation's latest state; a
+  new run's system-block state was then the only superseded entry and went at its next kept state, so the next run of
+  the same agent read its whole prompt again (first token 14 s -> 40 s on 42-49k-token prompts; 15 of 16 runs cold).
+  Shared-prefix states now go by recency only, beside the other conversations' latest states; a conversation's earlier
+  states still go first. A larger `TF_GLM_CACHE_ENTRIES` now helps too (before, it only delayed this). Same replies.
+
 ## v1.7 (2026-10-05): the Ablit weights (`ABLIT=1`, gated: needs `HF_TOKEN`)
 
 Image: `v0.6.0-c4cab25d2d36` (`sha256:b47c19d66633f27cbe37da13fbc580363f466c08b9529feab1eecb1a4b904bf1`), 75 patches, for two and three Sparks (unchanged from v1.6).
