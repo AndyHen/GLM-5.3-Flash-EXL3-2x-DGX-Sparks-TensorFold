@@ -7,7 +7,8 @@ Every change to this recipe, newest first. Each release names the image it serve
 
 - DFlash2-G (canada-quant, Apache-2.0) is the default drafter: `DRAFTER=dflash2g`; incoai's stays opt-in
   (`DRAFTER=dflash2`). Patches 0084 (`TF_GLM_DFLASH_WINDOW`, memory estimates) and 0085 (mask embedding).
-- `DFLASH_WINDOW` (default 2048, pending Phase 0).
+- `DFLASH_WINDOW` (default 2048). Phase 0: G at 95.9% of incoai's prose and 89.9% of its code at 4 requests,
+  replies identical; accepted as GO (`docs/phase0-results-2026-10-06.md`).
 - `tools/phase0.sh`, `tools/phase0_bench.py`: G against incoai, drafted == serial (`docs/PHASE0.md`).
 - No published image yet: `scripts/prepare.sh` builds it locally.
 
