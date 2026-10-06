@@ -1,0 +1,128 @@
+diff --git tensorfold/cuda/dflash_compat.py tensorfold/cuda/dflash_compat.py
+index 2331e1b..f0f8476 100644
+--- tensorfold/cuda/dflash_compat.py
++++ tensorfold/cuda/dflash_compat.py
+@@ -1,9 +1,11 @@
+ """DFlash2 drafters beyond the reference one, without a GPU import: the attention window of a full-attention drafter
+-(TF_GLM_DFLASH_WINDOW) and the drafter-shipped copies of the target's embedding and head, which are never loaded."""
++(TF_GLM_DFLASH_WINDOW), a learned mask embedding shipped as mask_embedding.pt, and the drafter-shipped copies of the
++target's embedding and head, which are never loaded."""
+ 
+ from __future__ import annotations
+ 
+ import os
++from pathlib import Path
+ 
+ DEFAULT_WINDOW = 2048            # tokens of context a full-attention drafter attends to unless TF_GLM_DFLASH_WINDOW says
+ MIN_WINDOW = 64                  # one attention tile
+@@ -27,3 +29,61 @@ def dflash_window(cfg: dict) -> int:
+     if window != 0 and window < MIN_WINDOW:
+         raise ValueError(f"TF_GLM_DFLASH_WINDOW is 0 (full attention) or at least {MIN_WINDOW} tokens, not {window}")
+     return window
++
++
++MASK_FILE = "mask_embedding.pt"
++SAMPLE_ROWS = (0, 1, 1000, 50000, 100000, 154856)      # rows compared with the target's (and the table's last)
++
++
++def load_mask_embedding(draft_dir, mask_id: int, hidden: int):
++    """The drafter's own embedding for its mask token, bf16 [hidden] on the CPU, or None without mask_embedding.pt.
++    The file holds {"mask_token_id": id, "embedding": tensor} or the tensor alone (vLLM's DFlash loader's format)."""
++
++    path = Path(draft_dir) / MASK_FILE
++    if not path.exists():
++        return None
++    import torch
++
++    state = torch.load(path, map_location="cpu", weights_only=True)
++    if isinstance(state, dict):
++        if int(state.get("mask_token_id", mask_id)) != mask_id:
++            raise ValueError(f"{MASK_FILE}'s mask_token_id {state.get('mask_token_id')} is not the drafter's {mask_id}")
++        if "embedding" not in state:
++            raise ValueError(f"{MASK_FILE} holds no 'embedding'")
++        state = state["embedding"]
++    if not isinstance(state, torch.Tensor) or state.numel() != hidden:
++        raise ValueError(f"{MASK_FILE} must hold {hidden} values (the drafter's hidden size)")
++    return state.reshape(hidden).to(torch.bfloat16).contiguous()
++
++
++def apply_mask_embedding(x, ids, mask_id: int, vec):
++    """Rows of ``x`` whose id is the mask token take ``vec`` (fixed shapes: safe inside a CUDA graph)."""
++
++    import torch
++
++    return torch.where((ids == mask_id).unsqueeze(1), vec.to(x.dtype), x)
++
++
++def check_owned_embedding(draft_dir, target_embed, rows=SAMPLE_ROWS) -> str:
++    """A drafter that ships embed_tokens must ship the target's (the target's are what drafts use): sampled rows are
++    compared with the target's BF16 table and a difference is refused. Returns a line for the log, "" when the drafter
++    ships no embedding."""
++
++    import torch
++    from safetensors import safe_open
++
++    with safe_open(str(Path(draft_dir) / "model.safetensors"), framework="pt", device="cpu") as f:
++        if "embed_tokens.weight" not in f.keys():
++            return ""
++        if not isinstance(target_embed, torch.Tensor):
++            return ("the drafter's embed_tokens were not compared (the target's embedding is quantized); the target's "
++                    "embedding and head are used")
++        table = f.get_slice("embed_tokens.weight")
++        vocab = table.get_shape()[0]
++        for r in sorted({r for r in rows if r < vocab} | {vocab - 1}):
++            mine = table[r:r + 1].to(torch.bfloat16)
++            theirs = target_embed[r:r + 1].to("cpu", torch.bfloat16)
++            if mine.shape != theirs.shape or not torch.equal(mine, theirs):
++                raise ValueError(f"the drafter's embed_tokens differ from the target's (row {r}): drafter-owned "
++                                 "embeddings and heads are not supported")
++    return "the drafter's embed_tokens equal the target's (sampled rows): the target's embedding and head are used"
+diff --git tensorfold/families/glm5_next/cuda/dflash2.py tensorfold/families/glm5_next/cuda/dflash2.py
+index 875c656..fb8dbf0 100644
+--- tensorfold/families/glm5_next/cuda/dflash2.py
++++ tensorfold/families/glm5_next/cuda/dflash2.py
+@@ -304,6 +304,18 @@ class Drafter:
+                     gu=quantize4(gpu(torch.cat((g, u)))),
+                     down=quantize4(gpu(dn))))
+         torch.cuda.empty_cache()
++        from tensorfold.cuda.dflash_compat import check_owned_embedding, load_mask_embedding
++
++        # a learned mask embedding (mask_embedding.pt) replaces the target's row for the mask token in block passes
++        mask = load_mask_embedding(path, self.mask_id, self.D)
++        self.mask_vec = mask.to(dev) if mask is not None else None
++        owned = check_owned_embedding(path, w.embed)
++        if self.rank == 0:
++            if mask is not None:
++                print(f"[tensorfold] Loaded DFlash mask embedding for mask_token_id {self.mask_id} from "
++                      "mask_embedding.pt", flush=True)
++            if owned:
++                print(f"[tensorfold] {owned}", flush=True)
+         self.inv_freq = 1.0 / theta ** (torch.arange(hd // 2, device=dev, dtype=torch.float32) * 2 / hd)
+         # Block rows sit past committed context and the next context update overwrites them.
+         from tensorfold.cuda.geometry import draft_ring_rows
+@@ -443,6 +455,10 @@ class Drafter:
+         n = self.block
+         x = torch.empty((n, self.D), dtype=torch.bfloat16, device=self.dev)
+         glue.embed(self.ids, self.w.embed, self.D, 1, x)
++        if self.mask_vec is not None:
++            from tensorfold.cuda.dflash_compat import apply_mask_embedding
++
++            x = apply_mask_embedding(x, self.ids, self.mask_id, self.mask_vec)
+         cos, sin = self._rotary(n)
+         idx = self._slots(n)
+         for i in range(len(self.layers)):
+diff --git tensorfold/families/glm5_next/cuda/dflash2_multi.py tensorfold/families/glm5_next/cuda/dflash2_multi.py
+index 702610d..59f950d 100644
+--- tensorfold/families/glm5_next/cuda/dflash2_multi.py
++++ tensorfold/families/glm5_next/cuda/dflash2_multi.py
+@@ -232,6 +232,10 @@ class MultiDrafter:
+         R = S * n
+         x = torch.empty((R, d.D), dtype=torch.bfloat16, device=self.dev)
+         glue.embed(self.ids[:R], w.embed, d.D, 1, x)
++        if d.mask_vec is not None:
++            from tensorfold.cuda.dflash_compat import apply_mask_embedding
++
++            x = apply_mask_embedding(x, self.ids[:R], d.mask_id, d.mask_vec)
+         cos, sin = self._rotary(rowpos)
+         for i in range(len(d.layers)):
+             x = self._layer(i, x, cos, sin, idx, S, pos, slot)

@@ -18,3 +18,10 @@ def test_engine_agrees_on_window_and_refuses_full_attention_in_parallel():
     assert "TF_GLM_DFLASH_WINDOW" in text                       # named in the ranks-differ error
     assert "dflash_window(read_config(drafter))" in text        # in the agreement list
     assert "full attention" in text and "--parallel 1" in text  # the refusal
+
+
+def test_both_block_passes_apply_the_mask():
+    for name in ("dflash2.py", "dflash2_multi.py"):
+        text = (GLM / name).read_text()
+        assert "apply_mask_embedding(x, " in text, name
+    assert "load_mask_embedding(path, self.mask_id, self.D)" in (GLM / "dflash2.py").read_text()
