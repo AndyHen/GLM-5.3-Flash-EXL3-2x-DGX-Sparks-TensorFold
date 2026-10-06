@@ -1,0 +1,74 @@
+diff --git tensorfold/cuda/dflash_compat.py tensorfold/cuda/dflash_compat.py
+new file mode 100644
+index 0000000..2331e1b
+--- /dev/null
++++ tensorfold/cuda/dflash_compat.py
+@@ -0,0 +1,29 @@
++"""DFlash2 drafters beyond the reference one, without a GPU import: the attention window of a full-attention drafter
++(TF_GLM_DFLASH_WINDOW) and the drafter-shipped copies of the target's embedding and head, which are never loaded."""
++
++from __future__ import annotations
++
++import os
++
++DEFAULT_WINDOW = 2048            # tokens of context a full-attention drafter attends to unless TF_GLM_DFLASH_WINDOW says
++MIN_WINDOW = 64                  # one attention tile
++OWNED = ("embed_tokens.weight", "lm_head.weight")    # copies of the target's: the target's own are used
++
++
++def dflash_window(cfg: dict) -> int:
++    """The drafter's context window in tokens: the config's ``sliding_window`` when it has one, else
++    TF_GLM_DFLASH_WINDOW (default 2048); 0 means full attention (every committed row, a flat context)."""
++
++    own = cfg.get("sliding_window")
++    if own is not None and int(own) > 0:
++        return int(own)
++    raw = os.environ.get("TF_GLM_DFLASH_WINDOW", "").strip()
++    if not raw:
++        return DEFAULT_WINDOW
++    try:
++        window = int(raw)
++    except ValueError:
++        raise ValueError(f"TF_GLM_DFLASH_WINDOW is a token count (0: full attention), not {raw!r}") from None
++    if window != 0 and window < MIN_WINDOW:
++        raise ValueError(f"TF_GLM_DFLASH_WINDOW is 0 (full attention) or at least {MIN_WINDOW} tokens, not {window}")
++    return window
+diff --git tensorfold/cuda/geometry.py tensorfold/cuda/geometry.py
+index ce38110..f7628e1 100644
+--- tensorfold/cuda/geometry.py
++++ tensorfold/cuda/geometry.py
+@@ -6,6 +6,7 @@ import math
+ import re
+ 
+ from .capacity import Geometry, Weights, headers, itemsize
++from .dflash_compat import OWNED, dflash_window
+ 
+ PREFILL_ROWS = 2048     # a prompt chunk's rows: Flash Next and GLM keep buffers of this many rows
+ PROMPT_SHARE = 32       # a dense prompt chunk's arrays take at most this fraction of the GPU's memory
+@@ -365,7 +366,7 @@ def draft_geometry(t: dict, world: int, reserve: int, *, bounded: bool = False,
+     heads = int(t["num_key_value_heads"]) // world
+     hd = int(t["head_dim"])
+     block = int((t.get("dflash_config") or {}).get("block_size", 16))
+-    window = int(t.get("sliding_window", 0))
++    window = dflash_window(t)
+     hidden = int(t["hidden_size"])
+     fixed = 16 * max(64, streams * block) * (hidden + int(t["intermediate_size"])) * 4
+     copies = 2 * streams + kept      # a stream's context and the one its taps replace it with; each kept prompt end
+@@ -383,7 +384,7 @@ def dflash2_geometry(t: dict, world: int, reserve: int, *, ring: bool, kv_heads:
+     heads = int(t["num_key_value_heads"]) // world if kv_heads is None else int(kv_heads)
+     hd = int(t["head_dim"])
+     block = int((t.get("dflash_config") or {}).get("block_size", 16))
+-    window = int(t.get("sliding_window", 0))
++    window = dflash_window(t)
+     fixed = 16 * max(64, block) * (int(t["hidden_size"]) + int(t["intermediate_size"])) * 4
+     rows = draft_ring_rows(window - 1, block) if ring and window > 0 else 0
+ 
+@@ -425,7 +426,7 @@ def dflash2_weights(draft_dir, world: int, fraction=None) -> Weights:
+             quantized.add(name)
+     resident = sum(q4(n, k) for n, k in mats)
+     for name, dims in shape.items():
+-        if name not in quantized:
++        if name not in quantized and name not in OWNED:      # a drafter's copies of the target's are not loaded
+             resident += math.prod(dims) * (4 if name.endswith("_codebook") else 2)
+     staging = max(4 * n * k + 24 * min(n, 8192) * k for n, k in mats)
+     return Weights(resident, staging, 0)
