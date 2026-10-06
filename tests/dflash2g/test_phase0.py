@@ -38,6 +38,20 @@ def test_gate_ignores_runs_without_concurrency_4():
     assert not ok and any("g-full" in line and "skipped" in line for line in lines)
 
 
+def test_long_prompts():
+    long = bench.long_prompts(ROOT)
+    assert set(long) == {"prose", "code"} and all(len(p) == 8 for p in long.values())
+    assert long == bench.long_prompts(ROOT)
+    for cat, prompts in long.items():
+        sizes = [len(p) for p in prompts]
+        # one at a time sends the first four: two of each size
+        assert sorted(sizes[:4])[1] < sorted(sizes[:4])[2]
+        for p, (name, task) in zip(prompts, bench.LONG[cat] * 2):
+            assert p.startswith("```\n" + (ROOT / name).read_text(encoding="utf-8")[:200])
+            assert p.endswith(task)
+    assert max(len(p) for p in long["code"]) > 16384 * bench.CHARS_PER_TOKEN * 0.95
+
+
 def test_identity_needs_both_hashes():
     assert bench.same_reply("ab12", "ab12")
     assert not bench.same_reply("ab12", "cd34")

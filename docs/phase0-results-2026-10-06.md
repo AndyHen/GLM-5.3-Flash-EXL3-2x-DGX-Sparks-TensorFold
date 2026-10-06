@@ -39,3 +39,34 @@ non-commercial). `DFLASH_WINDOW` stays 2048.
   cost incoai nothing.
 - These numbers are below the README's sparkDash ones (e.g. 108.8 tok/s prose at 4) for the method and prompts:
   aggregate here is all tokens over the batch's wall time, tail and prefill included.
+
+## Long context (`--long`)
+
+`tools/phase0_bench.py <label> --long`: this repo's README/CHANGELOG (prose) and scripts (code) cut to 7.7k-18.5k
+tokens, each task asking about the start, beyond a 2048-token window. g-full is `PARALLEL=1 DFLASH_WINDOW=0
+CONTEXT=131072`. Aggregate tok/s includes the long prompts' prefill; per request is decode only.
+
+| run | category | at once | agg tok/s | per request tok/s | tokens/round |
+|---|---|---:|---:|---:|---:|
+| g-full | prose | 1 | 40.55 | 49.25 | 2.389 |
+| g-full | code | 1 | 32.6 | 46.97 | 2.187 |
+| g-w2048 | prose | 1 | 41.06 | 49.68 | 2.483 |
+| g-w2048 | prose | 4 | 70.75 | 20.6 | 2.333 |
+| g-w2048 | code | 1 | 32.73 | 47.78 | 2.312 |
+| g-w2048 | code | 4 | 54.23 | 19.04 | 2.334 |
+| g-w4096 | prose | 1 | 40.93 | 49.6 | 2.486 |
+| g-w4096 | prose | 4 | 70.42 | 20.56 | 2.325 |
+| g-w4096 | code | 1 | 32.3 | 47.44 | 2.294 |
+| g-w4096 | code | 4 | 53.5 | 19.09 | 2.318 |
+| incoai | prose | 1 | 48.11 | 60.04 | 3.326 |
+| incoai | prose | 4 | 80.47 | 23.62 | 3.147 |
+| incoai | code | 1 | 36.03 | 55.03 | 2.971 |
+| incoai | code | 4 | 57.64 | 21.07 | 2.967 |
+
+Gate: g-w2048 prose 87.9%, code 94.1% of incoai; g-w4096 prose 87.5%, code 92.8%.
+
+- The window costs G nothing: 2048 and 4096 are within noise, and full attention is slightly worse (2.39 against
+  2.48 tokens a round on prose; G was trained on <= 4,096-token completions). `DFLASH_WINDOW=2048` stands.
+- On long contexts G drafts ~25% fewer tokens a round than incoai (which has its own 2048 window): ~12% slower on
+  prose, ~6% on code at 4 requests. A larger window does not close that; draft-policy tuning (Phase 1) or a drafter
+  trained on longer completions would have to.

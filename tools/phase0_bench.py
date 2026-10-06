@@ -3,7 +3,7 @@
 tokens, seconds and the server's draft stats (the reply's "tensorfold" block) to <out>/<label>.json; --identity also
 checks drafted replies against "draft": false ones (token_sha); --report <out> writes report.md and the go/no-go gate.
 
-  tools/phase0_bench.py <label> [--concurrency 1,4] [--identity] [--out DIR]
+  tools/phase0_bench.py <label> [--concurrency 1,4] [--identity] [--long] [--out DIR]
   tools/phase0_bench.py --report DIR
 API_URL as in tools/client.py."""
 import argparse
@@ -44,6 +44,47 @@ PROMPTS = {
 }
 
 
+# --long: this repo's own files (the task's file first, then the others) cut to ~8k and ~16k tokens, the task after
+# them asking for the start, which a 2048-token drafter window no longer sees.
+CHARS_PER_TOKEN = 3.6
+LONG_SIZES = (8192, 16384)
+LONG = {
+    "prose": [
+        ("README.md", "Summarize the document above section by section, in order, starting with its first section."),
+        ("CHANGELOG.md", "Describe, entry by entry from the first one above, what changed, one short paragraph each."),
+        ("README.md", "Write the questions a new user would ask about the setup described at the start of the "
+                      "document above, each with its answer from the text."),
+        ("CHANGELOG.md", "List every setting and environment variable the text above mentions, in order of first "
+                         "appearance, each with what it does."),
+    ],
+    "code": [
+        ("start.sh", "Rewrite the first three functions defined above with a comment on every line, in full."),
+        ("scripts/config.sh", "Write a bash script that checks the first ten settings defined above have the "
+                              "defaults the file gives them."),
+        ("tools/test_queued_cancellation.py", "Explain the first test above step by step, then rewrite it with "
+                                              "clearer names, in full."),
+        ("scripts/prepare.sh", "Convert the first 80 lines of the script above to Python, keeping its behaviour."),
+    ],
+}
+
+
+def long_prompts(root: Path) -> dict[str, list[str]]:
+    """Each category's tasks at 8k then 16k tokens, interleaved so the first four (one at a time) have both sizes."""
+
+    out = {}
+    for cat, tasks in LONG.items():
+        files = list(dict.fromkeys(name for name, _ in tasks))
+        texts = {name: (root / name).read_text(encoding="utf-8") for name in files}
+        order = [(i, LONG_SIZES[(i + rep) % 2]) for rep in range(2) for i in range(len(tasks))]
+        prompts = []
+        for i, size in order:
+            first, task = tasks[i]
+            corpus = "\n\n".join(texts[n] for n in [first] + [n for n in files if n != first])
+            prompts.append(f"```\n{corpus[:int(size * CHARS_PER_TOKEN)]}\n```\n\n{task}")
+        out[cat] = prompts
+    return out
+
+
 def ask(prompt: str, *, draft: bool = True) -> dict:
     body = {"model": os.environ.get("MODEL", "GLM-5.3-Flash-EXL3"), "max_tokens": MAX_TOKENS, "seed": SEED,
             "messages": [{"role": "user", "content": prompt}]}
@@ -54,7 +95,8 @@ def ask(prompt: str, *, draft: bool = True) -> dict:
     with open_url(req, timeout=1800) as resp:
         reply = json.load(resp)
     stats = reply.get("tensorfold") or {}
-    return {"tokens": int(reply["usage"]["completion_tokens"]), "seconds": time.perf_counter() - t0,
+    return {"tokens": int(reply["usage"]["completion_tokens"]), "prompt_tokens": int(reply["usage"].get("prompt_tokens") or 0),
+            "seconds": time.perf_counter() - t0,
             "decode_s": float(stats.get("decode_s") or 0.0), "tokens_per_round": float(stats.get("tokens_per_round") or 0.0),
             "drafted": int(stats.get("drafted") or 0), "accepted": int(stats.get("accepted") or 0),
             "token_sha": stats.get("token_sha")}
@@ -139,6 +181,7 @@ def main() -> int:
     ap.add_argument("label", nargs="?")
     ap.add_argument("--concurrency", default="1,4")
     ap.add_argument("--identity", action="store_true")
+    ap.add_argument("--long", action="store_true", help="~8k and ~16k-token prompts from this repo's files")
     ap.add_argument("--out", default=os.path.expanduser("~/phase0-results/manual"))
     ap.add_argument("--report")
     a = ap.parse_args()
@@ -149,16 +192,19 @@ def main() -> int:
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     result: dict = {}
-    for cat, prompts in PROMPTS.items():
+    sets = long_prompts(Path(__file__).resolve().parent.parent) if a.long else PROMPTS
+    for cat, prompts in sets.items():
         result[cat] = {}
         for conc in (int(c) for c in a.concurrency.split(",")):
             todo = prompts[:4] if conc == 1 else prompts
             rows, wall = batch(todo, conc)
             result[cat][str(conc)] = {**summarize(rows, wall), "rows": rows}
-            print(f"{a.label} {cat} x{conc}: {result[cat][str(conc)]['agg_tok_s']} tok/s aggregate, "
-                  f"{result[cat][str(conc)]['tokens_per_round']} tokens/round", flush=True)
+            s = result[cat][str(conc)]
+            print(f"{a.label} {cat} x{conc}: {s['agg_tok_s']} tok/s aggregate, {s['per_req_tok_s']} per request, "
+                  f"{s['tokens_per_round']} tokens/round, prompts {min(r['prompt_tokens'] for r in rows)}-"
+                  f"{max(r['prompt_tokens'] for r in rows)} tokens", flush=True)
     if a.identity:
-        result["identity"] = identity(PROMPTS["prose"][:2] + PROMPTS["code"][:2])
+        result["identity"] = identity(sets["prose"][:2] + sets["code"][:2])
         print(f"{a.label} identity: {sum(r['same'] for r in result['identity'])} of {len(result['identity'])} same")
     (out / f"{a.label}.json").write_text(json.dumps(result, indent=1))
     return 0
