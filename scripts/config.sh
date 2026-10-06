@@ -74,13 +74,13 @@ IMAGE="${IMAGE:-tensorfold-glm53:${TF_VERSION}}"
 # they are part of the image's hash, so a change rebuilds it like a patch does
 IMAGE_EXTRAS="av==18.1.0 xgrammar>=0.2.8,<0.3"
 image_hash() { (cat patches/*.patch 2>/dev/null; echo "$IMAGE_EXTRAS") | sha256sum | cut -c1-12; }
-GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold}"
+GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/andyhen/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold}"
 # The published image of this release's patches, pinned: prepare.sh pulls it by digest (a tag can be moved, a digest
 # cannot) while patches/*.patch and IMAGE_EXTRAS still hash to IMAGE_TAG's hash. Other patches pull
 # $GHCR_IMAGE:<TF_VERSION>-<hash> when one is published, else build locally. scripts/publish-image.sh prints both.
 # The same image serves two and three Sparks.
-IMAGE_TAG="${IMAGE_TAG:-v0.6.0-31557ed1cef6}"
-IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:cbb4b3c66273e2965dd40a7227e7a5243db333fe250113fb3987462ad4f12588}"
+IMAGE_TAG="${IMAGE_TAG:-}"           # none published yet: prepare.sh tries $GHCR_IMAGE:<hash>, then builds locally
+IMAGE_DIGEST="${IMAGE_DIGEST:-}"
 # the registry reference prepare.sh pulls for these patches: the pinned digest, or the hash's tag
 prebuilt_image() {
   local tag="${TF_VERSION}-$(image_hash)"
@@ -91,8 +91,10 @@ CONTAINER_NAME="${CONTAINER_NAME:-glm53-flash-tf}"           # the same name on 
 SERVED_NAME="${SERVED_NAME:-GLM-5.3-Flash-EXL3}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8888}"
-DRAFTER="${DRAFTER:-dflash2}"        # dflash2: incoai/GLM-5.3-Flash-DFlash2 drafts (CC BY-NC-ND 4.0: non-commercial
-                                     # use only), +5-10% decode over mtp; mtp: the checkpoint's own MTP head
+DRAFTER="${DRAFTER:-dflash2g}"       # dflash2g: canada-quant/GLM-5.3-Flash-DFlash2-G drafts (Apache-2.0; patches 0084,
+                                     # 0085); dflash2: incoai/GLM-5.3-Flash-DFlash2 (CC BY-NC-ND 4.0: non-commercial use
+                                     # only); mtp: the checkpoint's own MTP head, one request at a time
+is_dflash() { [[ "$DRAFTER" == dflash2 || "$DRAFTER" == dflash2g ]]; }
 # The checkpoint's MTP head beside DFlash2 (TensorFold's TF_GLM_MTP): auto (default) leaves it out while DFlash2
 # drafts every request; TensorFold v0.6.0's own default, 1, would load it (1.77 GiB a Spark) with PARALLEL=1.
 export TF_GLM_MTP="${TF_GLM_MTP:-auto}"
@@ -102,11 +104,11 @@ export TF_GLM_MTP="${TF_GLM_MTP:-auto}"
 VISION="${VISION:-1}"
 VISION_URLS="${VISION_URLS:-0}"
 # Concurrent requests (patches 0026-0030, 0035, 0040, 0041: one shared pool of per-token caches, one batched verify window
-# a round): 1 to 8 (patch 0069), with DRAFTER=dflash2 only (mtp: 1). Default 4 on two Sparks, 8 on three (v1.5).
+# a round): 1 to 8 (patch 0069), with a DFlash2 drafter only (mtp: 1). Default 4 on two Sparks, 8 on three (v1.5).
 # sparkDash aggregate decode at 4 / 8 requests at once: two Sparks prose 103.2 / 130.8 tok/s, code 126.7 / 167.0; three
 # Sparks prose 121.8 / 166.0, code 165.3 / 211.5. One request alone decodes as fast either way. The memory reserve
 # grows with PARALLEL (below), so the shared pool shrinks: two Sparks ~1.5M tokens at 8 (2.0-2.6M at 4), three ~4M.
-if [[ "$DRAFTER" != dflash2 ]]; then _par=1; elif [[ "${TP:-2}" == 3 ]]; then _par=8; else _par=4; fi
+if ! is_dflash; then _par=1; elif [[ "${TP:-2}" == 3 ]]; then _par=8; else _par=4; fi
 PARALLEL="${PARALLEL:-$_par}"
 # The DSA latent cache and the indexer's pooled keys (patch 0038): fp8 (default) holds them as e4m3 rows with a
 # power-of-two scale each, half bf16's bytes: the 1M-token window with 4 streams fits (rank 0: 88.09 GiB estimated,
@@ -119,12 +121,22 @@ export TF_GLM_KV="$KV"
 # weights give back), 524,288 with mtp. start.sh falls back to the largest that fits when a start's memory budget is
 # smaller. 0: the largest the memory affords (then no memory is left to keep other conversations' prompts).
 DENSE="${DENSE:-q4}"
-if [[ "$KV" != bf16 ]]; then _ctx=1048576; elif [[ "$DRAFTER" != dflash2 ]]; then _ctx=524288
+if [[ "$KV" != bf16 ]]; then _ctx=1048576; elif ! is_dflash; then _ctx=524288
 elif [[ "$VISION" == 1 && "$DENSE" != q4 ]]; then _ctx=163840; else _ctx=196608; fi
 CONTEXT="${CONTEXT:-$_ctx}"
-DFLASH2_ID="${DFLASH2_ID:-incoai/GLM-5.3-Flash-DFlash2}"
-_rev=""; [[ "$DFLASH2_ID" == incoai/GLM-5.3-Flash-DFlash2 ]] && _rev=bf582e4eacc1810f76656d1811693ff6c6737d2a
+if [[ "$DRAFTER" == dflash2 ]]; then _id=incoai/GLM-5.3-Flash-DFlash2; else _id=canada-quant/GLM-5.3-Flash-DFlash2-G; fi
+DFLASH2_ID="${DFLASH2_ID:-$_id}"
+case "$DFLASH2_ID" in
+  incoai/GLM-5.3-Flash-DFlash2) _rev=bf582e4eacc1810f76656d1811693ff6c6737d2a ;;
+  canada-quant/GLM-5.3-Flash-DFlash2-G) _rev=b8ba68b022d612958d1a9c447f294f148a156ed1 ;;
+  *) _rev="" ;;
+esac
 DFLASH2_REVISION="${DFLASH2_REVISION-$_rev}"   # DFlash2's pinned revision, as MODEL_REVISION above
+# The context window of a full-attention drafter (DFlash2-G; patch 0084's TF_GLM_DFLASH_WINDOW): its 8 layers attend
+# to the last DFLASH_WINDOW committed tokens, in a ring like incoai's 2,048-token sliding window (a drafter with its own
+# sliding_window keeps it). 0: every committed token (full attention, PARALLEL=1 only: 16 KiB a token on each Spark).
+DFLASH_WINDOW="${DFLASH_WINDOW:-2048}"
+export TF_GLM_DFLASH_WINDOW="$DFLASH_WINDOW"
 # Think before answering by default (0: answer directly unless a request asks to think); off by default with the Ablit
 # weights (ABLIT=1), which give their best results without thinking
 _think=1; [[ "$MODEL_ID" == "$ABLIT_ID" ]] && _think=0

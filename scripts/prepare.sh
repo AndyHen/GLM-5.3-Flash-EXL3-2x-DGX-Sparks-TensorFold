@@ -7,7 +7,7 @@
 #      $GHCR_IMAGE when a matching tag is reachable (PULL=0 skips that), else built locally
 #   3. the same image on the worker: pulled there, else streamed from the head (docker save | ssh docker load)
 #   4. download the checkpoint on the head into the Hugging Face cache (~164 GiB, resumable), and DFlash2 too when
-#      DRAFTER=dflash2, at their pinned revisions (MODEL_REVISION, DFLASH2_REVISION)
+#      DRAFTER=dflash2g or dflash2, at their pinned revisions (MODEL_REVISION, DFLASH2_REVISION)
 #   5. verify the checkpoint with `tensorfold info`
 #   6. the same files on the worker, copied from the head over the Sparks' link (rsync), checked file by file; or, with
 #      WORKER_WEIGHTS=nfs, a read-only NFS volume of the head's cache on the worker, checked the same way
@@ -91,7 +91,7 @@ PATCHES_HASH=$(image_hash)
 built_hash=$(docker image inspect -f '{{index .Config.Labels "tf.patches"}}' "$IMAGE" 2>/dev/null || true)
 free_gb() { df -BG --output=avail "$1" 2>/dev/null | tail -1 | tr -dc '0-9'; }
 worker_free_gb() { worker "$1" "df -BG --output=avail '$2' | tail -1 | tr -dc '0-9'"; }
-models=("$MODEL_ID"); [[ "$DRAFTER" == dflash2 ]] && models+=("$DFLASH2_ID")
+models=("$MODEL_ID"); is_dflash && models+=("$DFLASH2_ID")
 # hub_missing_gb: GB (GiB, as df counts) the download still needs on the head: the files of each revision to serve
 # whose blob is not in the cache yet (by name, the LFS sha256 or else the git blob id, and by size), from the Hub's
 # file list. A new pin that shares its blobs with a cached revision needs next to nothing (issue #24). Asked with

@@ -13,12 +13,12 @@
 #   ./start.sh restart --parallel 2 --context 524288
 #   CONTEXT=131072 ./start.sh restart
 #   KV=bf16 ./start.sh restart         # the exact bf16 KV cache (and a 196,608 window)
-#   DRAFTER=mtp ./start.sh restart     # the checkpoint's own MTP head instead of DFlash2 (one request at a time)
+#   DRAFTER=mtp ./start.sh restart     # the checkpoint's own MTP head instead of DFlash2-G (one request at a time)
 #   DRY_RUN=1 ./start.sh               # print every rank's docker command and exit, stopping and starting nothing
 # Extra arguments go to both ranks after the defaults, so they win (the last value of a flag counts).
 # Setup: WORKER=user@<worker address> in scripts/local.sh (key-based ssh).
 # Settings, from the environment, scripts/local.sh or ./.env (defaults and measured effects in scripts/config.sh):
-#   serving  CONTEXT, PARALLEL, KV, DENSE, DRAFTER, DRAFT_POLICY, COPY, COPY_MAX, COPY_CODE, SPLIT, KDA_CHUNKED,
+#   serving  CONTEXT, PARALLEL, KV, DENSE, DRAFTER, DFLASH_WINDOW, DRAFT_POLICY, COPY, COPY_MAX, COPY_CODE, SPLIT, KDA_CHUNKED,
 #            SHARED_PREFIX, MULTI_PREFILL, STREAM_SMOOTH, STREAM_SMOOTH_MS, FILL_BUDGET_MS, FILL_DRAFTS, KV_POOL_GIB,
 #            MEMORY_RESERVE_GIB, MAX_TOKENS, THINKING, VISION, VISION_URLS, COMM, SERVED_NAME, HOST, PORT
 #   nodes    WORKER, FABRIC_PEER, WORKER_HF_CACHE, MASTER_PORT, NCCL_RAILS (1: one RoCE device), NCCL_CHANNELS,
@@ -58,7 +58,7 @@ need_hf_token                        # ABLIT=1 (gated weights) without HF_TOKEN:
 # The serve arguments both ranks share: scripts/config.sh's defaults first, then the command line's (argparse keeps
 # the last value). --drafter goes in front after the setup step, which knows DFlash2's snapshot.
 SERVE_ARGS=(--context "$CONTEXT" --parallel "$PARALLEL" --max-tokens "$MAX_TOKENS")
-[[ "$DRAFTER" =~ ^(mtp|dflash2)$ ]] || die "DRAFTER is mtp or dflash2, not $DRAFTER"
+[[ "$DRAFTER" =~ ^(mtp|dflash2|dflash2g)$ ]] || die "DRAFTER is dflash2g, dflash2 or mtp, not $DRAFTER"
 [[ "$DENSE" =~ ^(bf16|fp8|q4)$ ]] || die "DENSE is bf16, fp8 or q4, not $DENSE"
 [[ "$COMM" =~ ^(nccl|roce)$ ]] || die "COMM is nccl or roce, not $COMM"
 check_workers
@@ -66,7 +66,10 @@ check_workers
 [[ "$CONTEXT" =~ ^[0-9]+$ && "$CONTEXT" -le 1048576 ]] || die "CONTEXT is a token count up to 1048576 (0: the largest that fits), not $CONTEXT"
 [[ "$PARALLEL" =~ ^[1-8]$ ]] || die "PARALLEL is 1 to 8, not $PARALLEL"
 [[ "$MAX_TOKENS" =~ ^[1-9][0-9]*$ ]] || die "MAX_TOKENS is a token count, not $MAX_TOKENS"
-[[ "$DRAFTER" == dflash2 || "$PARALLEL" == 1 ]] || die "PARALLEL=$PARALLEL needs DRAFTER=dflash2 (mtp serves one request at a time: PARALLEL=1)"
+is_dflash || [[ "$PARALLEL" == 1 ]] || die "PARALLEL=$PARALLEL needs a DFlash2 drafter (DRAFTER=dflash2g or dflash2; mtp serves one request at a time: PARALLEL=1)"
+[[ "$DFLASH_WINDOW" =~ ^(0|[1-9][0-9]*)$ ]] && (( DFLASH_WINDOW == 0 || DFLASH_WINDOW >= 64 )) ||
+  die "DFLASH_WINDOW is 0 (full attention) or a token count of at least 64, not $DFLASH_WINDOW"
+[[ "$DFLASH_WINDOW" != 0 || "$PARALLEL" == 1 ]] || die "DFLASH_WINDOW=0 (full attention) needs PARALLEL=1"
 for v in SPLIT SHARED_PREFIX KDA_CHUNKED COPY_CODE MULTI_PREFILL STREAM_SMOOTH; do [[ "${!v}" =~ ^[01]$ ]] || die "$v is 0 or 1, not ${!v}"; done
 [[ "$DISPLAY_KV_MIB" =~ ^(0|[1-9][0-9]{0,3})$ ]] && (( DISPLAY_KV_MIB % 16 == 0 && DISPLAY_KV_MIB <= 2032 )) ||
   die "DISPLAY_KV_MIB is a multiple of 16 from 0 to 2032, not $DISPLAY_KV_MIB"
@@ -203,7 +206,7 @@ snapshot() {  # <repo id>: its snapshot path in the container, checked on every 
   echo "/root/.cache/huggingface/$sub"
 }
 MODEL_ARG=$(snapshot "$MODEL_ID")
-if [[ "$DRAFTER" == dflash2 ]]; then DRAFTER_ARG=$(snapshot "$DFLASH2_ID")
+if is_dflash; then DRAFTER_ARG=$(snapshot "$DFLASH2_ID")
 else DRAFTER_ARG=none; fi                           # the checkpoint's MTP head, even when DFlash2 is downloaded
 SERVE_ARGS=(--drafter "$DRAFTER_ARG" "${SERVE_ARGS[@]}")   # a --drafter on the command line comes later and wins
 
