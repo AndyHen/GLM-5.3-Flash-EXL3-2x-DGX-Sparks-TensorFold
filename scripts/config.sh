@@ -79,8 +79,8 @@ GHCR_IMAGE="${GHCR_IMAGE:-ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-ten
 # cannot) while patches/*.patch and IMAGE_EXTRAS still hash to IMAGE_TAG's hash. Other patches pull
 # $GHCR_IMAGE:<TF_VERSION>-<hash> when one is published, else build locally. scripts/publish-image.sh prints both.
 # The same image serves two and three Sparks.
-IMAGE_TAG="${IMAGE_TAG:-v0.6.0-1692d2df78d2}"
-IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:a8067cd7e14c14fa83d1dbed60261428f6d1737cec4554445573354af040dd7c}"
+IMAGE_TAG="${IMAGE_TAG:-v0.6.0-31557ed1cef6}"
+IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:cbb4b3c66273e2965dd40a7227e7a5243db333fe250113fb3987462ad4f12588}"
 # the registry reference prepare.sh pulls for these patches: the pinned digest, or the hash's tag
 prebuilt_image() {
   local tag="${TF_VERSION}-$(image_hash)"

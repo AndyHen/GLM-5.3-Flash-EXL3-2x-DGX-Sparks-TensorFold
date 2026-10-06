@@ -3,9 +3,10 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
-## Unreleased
+## v1.8 (2026-10-06): pictures read once, quoted markers, capacity refusals, and the take-over memory fix
 
-Image: `v0.6.0-dcc41707fc76` is the tag the patch set hashes to (`1692d2df78d2` at v1.7.1); maintainers build it, publish it and pin its digest in `scripts/config.sh` at release. 77 patches.
+Image: `v0.6.0-31557ed1cef6` (`sha256:cbb4b3c66273e2965dd40a7227e7a5243db333fe250113fb3987462ad4f12588`), 82 patches, for two and three Sparks (v1.7.1's plus `0078`-`0083`). Every change below was also
+tested live on two Sparks before release; results are on the PRs.
 
 ### Fixed
 - **A fresh conversation after a long one no longer runs both ranks out of memory** (`_take_over`, patch
@@ -17,6 +18,23 @@ Image: `v0.6.0-dcc41707fc76` is the tag the patch set hashes to (`1692d2df78d2` 
   walk). After a 256k, 21-turn conversation, a fresh one on 2 Sparks: `save_rows` 22 -> 1, reserved +14.8 -> +1.4 GiB,
   `take_over` 3.3 -> 0.10 s; before, the driver logged `NV_ERR_NO_MEMORY` 22 times. After: 3 fresh boots, 5 cycles
   of a long task then a fresh one, 48 benchmark attempts, no allocation failure; pass counts match the unpatched build where it had the same trials (15 of 21 graded at low effort on both; 15 of 21 at high effort against 10 of 11 before). These runs used the v1.4 patch set; patches 0071, 0074 and 0077 change the shared pool and the kept cap (`multi.py`), not `_take_over`, so the patch applies to v1.7.1 unchanged.
+
+### Added
+- **`TENSORFOLD_GLM_PICTURE_CACHE`** (patch `0079-glm-picture-cache`, by ThomasWadeZ, #63): the vision frontend reads
+  a request's pictures once, not on every turn of the chat. 10 pictures in a chat, a later turn's first token
+  0.43-0.46 s -> 0.16-0.19 s; prompt tokens and replies identical. Host memory only, LRU-capped
+  (`_PICTURE_CACHE_MB`, default 384; `_PICTURE_CANVASES`, default 8); `0` restores the old path.
+- **Quoted media markers** (patch `0080-vision-quoted-markers`, by ThomasWadeZ, #64, needs `0079` first): every
+  picture and clip of a request carries a per-request nonce, so text that merely quotes the template's picture span
+  stays text. A request quoting it beside a real picture was a 400, now answers; a template or client that drops a
+  picture is still refused.
+- **Capacity refusals render once** (patch `0081-tfcap-capacity-status`, by johnwhited, #48): 429 with
+  `Retry-After: 5` everywhere (was a bare 503 at two sites, a 400 on the generate path).
+- **`TF_GLM_MAX_QUEUED`** (patch `0082-tfcap-admission-cap`, by johnwhited, #48): unset queues as every scheduler
+  always has; a number refuses foreground requests past the lanes plus that many. With `0`, the fifth request on four
+  lanes gets 429 + `Retry-After: 5` at once; unset, it queues as before (38 s in the release check).
+- **Delivery abort** (patch `0083-tfcap-delivery-abort`, by johnwhited, #48): a stream whose delivery callback raises
+  (broken pipe, reset, timeout) ends at once and frees its lane, instead of the lane leaking until generation ends.
 
 ## v1.7.1 (2026-10-05): a new agent run resumes its system prompt again once the kept cap is full
 
