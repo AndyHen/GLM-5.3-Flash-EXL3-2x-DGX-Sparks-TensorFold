@@ -72,3 +72,76 @@ index ce38110..f7628e1 100644
              resident += math.prod(dims) * (4 if name.endswith("_codebook") else 2)
      staging = max(4 * n * k + 24 * min(n, 8192) * k for n, k in mats)
      return Weights(resident, staging, 0)
+diff --git tensorfold/families/glm5_next/cuda/dflash2.py tensorfold/families/glm5_next/cuda/dflash2.py
+index 69d2268..875c656 100644
+--- tensorfold/families/glm5_next/cuda/dflash2.py
++++ tensorfold/families/glm5_next/cuda/dflash2.py
+@@ -249,7 +249,12 @@ class Drafter:
+         self.block = int(block or dc["block_size"])
+         self.top_k = int(dc["selector_top_k"])
+         self.tap_layers = tuple(int(i) for i in dc["target_layer_ids"])
+-        self.window = int(cfg["sliding_window"]) - 1
++        from tensorfold.cuda.dflash_compat import dflash_window
++
++        # rows before the block a query sees: the drafter's sliding window, a full-attention drafter's
++        # TF_GLM_DFLASH_WINDOW, or (0: full attention) every committed row, which turns the ring off below
++        span = dflash_window(cfg)
++        self.window = span - 1 if span > 0 else capacity + self.block
+         self.causal = bool(cfg.get("is_causal", True))
+         self.inter = mlps[self.rank]
+         m0 = sum(mlps[:self.rank])
+diff --git tensorfold/families/glm5_next/cuda/engine.py tensorfold/families/glm5_next/cuda/engine.py
+index 2007e48..2840a7b 100644
+--- tensorfold/families/glm5_next/cuda/engine.py
++++ tensorfold/families/glm5_next/cuda/engine.py
+@@ -367,7 +367,9 @@ def multi_draft_bytes(t: dict, streams: int, world: int = 2, *, ring: bool, capa
+     heads = split_sizes(int(t["num_key_value_heads"]), world, 1)[rank]
+     hd = int(t["head_dim"])
+     block = int((t.get("dflash_config") or {}).get("block_size", 16))
+-    window = int(t.get("sliding_window", 0))
++    from tensorfold.cuda.dflash_compat import dflash_window
++
++    window = dflash_window(t)
+     ring_rows = draft_ring_rows(window - 1, block) if ring and window > 0 else 0
+     cap = ring_rows if 0 < ring_rows < capacity + block else capacity + block
+ 
+@@ -622,7 +624,11 @@ class GlmEngine:
+ 
+         def draft_geometry(text):
+             from tensorfold.cuda.capacity import Geometry
++            from tensorfold.cuda.dflash_compat import dflash_window
+ 
++            if parallel > 1 and dflash_window(text) == 0:
++                raise ValueError("TF_GLM_DFLASH_WINDOW=0 (full attention) keeps every committed row of each stream's "
++                                 "drafter context: serve it with --parallel 1, or give a window such as 2048")
+             g = dflash2_geometry(text, world, MAX_ROWS, ring=DRAFT_RING,
+                                  kv_heads=tp_mod.split_sizes(int(text["num_key_value_heads"]), world, 1)[rank])
+             if parallel == 1:
+@@ -660,12 +666,16 @@ class GlmEngine:
+         else:
+             verify_code = [verify_code]
+         # every rank must run the same calls: refuse to start when they were given different settings
++        from tensorfold.cuda.capacity import config as read_config
++        from tensorfold.cuda.dflash_compat import dflash_window
++
+         mine = [int(drafter is not None), capacity, int(long_context), int(serial_only), int(LATENT),
+                 prefill_rows, self.grid, KVB_KINDS.index(kvb)] + (self.copy.code() if self.copy is not None else [0, 0, 0, 0]) + \
+             self.split.code() + [int(self.dump is not None), quant_code, self.shared, int(DRAFT_RING), int(self.mtp_on),
+                                  parallel, *verify_code, int(union_cover()), MAX_ROWS, len(WIDE_GRAPHS),
+                                  sum(WIDE_GRAPHS), max(WIDE_GRAPHS, default=0),
+-                                 KV_KINDS.index(kv), len(cfg.eos), sum(cfg.eos)]
++                                 KV_KINDS.index(kv), len(cfg.eos), sum(cfg.eos),
++                                 dflash_window(read_config(drafter)) if drafter is not None else -1]
+         # other conversations' kept prompts get what the window leaves, at most TF_GLM_CACHE_GIB, the same on both ranks
+         plan = self.capacity_plan
+         wanted = int(float(os.environ.get("TF_GLM_CACHE_GIB", "3")) * 2 ** 30)
+@@ -676,7 +686,8 @@ class GlmEngine:
+             raise RuntimeError("the ranks were started with different settings (draft model, context, drafts, "
+                                "TF_GLM_LATENT, TF_GLM_PREFILL_ROWS, TF_GLM_PROMPT_GRID, TF_GLM_KVB, TF_GLM_COPY_*, "
+                                "TF_GLM_HC_SPLIT*, TF_GLM_PREFILL_OVERLAP, TF_GLM_OVERLAP_PIECES, TF_GLM_DRAFT_DUMP, "
+-                               "TF_GLM_DRAFT_QUANT, TF_GLM_SHARED_PREFIX, TF_GLM_DRAFT_RING, TF_GLM_MTP, --parallel, "
++                               "TF_GLM_DRAFT_QUANT, TF_GLM_SHARED_PREFIX, TF_GLM_DRAFT_RING, TF_GLM_DFLASH_WINDOW, "
++                               "TF_GLM_MTP, --parallel, "
+                                "TF_GLM_MULTI_VERIFY, TF_GLM_MULTI_SAMPLER / _DEPTH / _OVERHEAD_MS / _ASYNC / _LONE / _PROFILE / _WINDOW, "
+                                "TENSORFOLD_NUCLEUS_UNION, TF_GLM_MAX_ROWS, TF_GLM_WIDE_GRAPHS, TF_GLM_KV, TF_GLM_ASSISTANT_ENDS): "
+                                f"rank 0 {rows[0][:-1]}, " + ", ".join(f"rank {r} {rows[r][:-1]}" for r in odd) +
