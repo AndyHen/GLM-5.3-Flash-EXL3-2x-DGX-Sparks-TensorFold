@@ -34,7 +34,7 @@ index 0000000..2331e1b
 +        raise ValueError(f"TF_GLM_DFLASH_WINDOW is 0 (full attention) or at least {MIN_WINDOW} tokens, not {window}")
 +    return window
 diff --git tensorfold/cuda/geometry.py tensorfold/cuda/geometry.py
-index ce38110..f7628e1 100644
+index ce38110..4c03a3f 100644
 --- tensorfold/cuda/geometry.py
 +++ tensorfold/cuda/geometry.py
 @@ -6,6 +6,7 @@ import math
@@ -63,7 +63,21 @@ index ce38110..f7628e1 100644
      fixed = 16 * max(64, block) * (int(t["hidden_size"]) + int(t["intermediate_size"])) * 4
      rows = draft_ring_rows(window - 1, block) if ring and window > 0 else 0
  
-@@ -425,7 +426,7 @@ def dflash2_weights(draft_dir, world: int, fraction=None) -> Weights:
+@@ -393,6 +394,13 @@ def dflash2_geometry(t: dict, world: int, reserve: int, *, ring: bool, kv_heads:
+     return Geometry(bytes_at, reserve)
+ 
+ 
++def dflash2_window_bytes(t: dict, kv_heads: int) -> int:
++    """A kept prompt's copy of a GLM DFlash2 drafter's window rows (``multi.draft_window``) on a rank with ``kv_heads``
++    KV heads: keys and values of the window's rows in every draft layer, bf16."""
++
++    return 2 * int(t["num_hidden_layers"]) * int(kv_heads) * int(t["head_dim"]) * dflash_window(t) * 2
++
++
+ def dflash2_weights(draft_dir, world: int, fraction=None) -> Weights:
+     """GLM's DFlash2 drafter as held on each rank (4-bit copies, bf16 norms, fp32 codebooks), and its staging;
+     ``fraction(kind, n)``: this rank's share of n query (``q``), key/value (``kv``) or MLP (``mlp``) rows (default
+@@ -425,7 +433,7 @@ def dflash2_weights(draft_dir, world: int, fraction=None) -> Weights:
              quantized.add(name)
      resident = sum(q4(n, k) for n, k in mats)
      for name, dims in shape.items():
@@ -91,7 +105,7 @@ index 69d2268..875c656 100644
          self.inter = mlps[self.rank]
          m0 = sum(mlps[:self.rank])
 diff --git tensorfold/families/glm5_next/cuda/engine.py tensorfold/families/glm5_next/cuda/engine.py
-index 2007e48..2840a7b 100644
+index 2007e48..0082f01 100644
 --- tensorfold/families/glm5_next/cuda/engine.py
 +++ tensorfold/families/glm5_next/cuda/engine.py
 @@ -367,7 +367,9 @@ def multi_draft_bytes(t: dict, streams: int, world: int = 2, *, ring: bool, capa
@@ -145,3 +159,22 @@ index 2007e48..2840a7b 100644
                                 "TF_GLM_MULTI_VERIFY, TF_GLM_MULTI_SAMPLER / _DEPTH / _OVERHEAD_MS / _ASYNC / _LONE / _PROFILE / _WINDOW, "
                                 "TENSORFOLD_NUCLEUS_UNION, TF_GLM_MAX_ROWS, TF_GLM_WIDE_GRAPHS, TF_GLM_KV, TF_GLM_ASSISTANT_ENDS): "
                                 f"rank 0 {rows[0][:-1]}, " + ", ".join(f"rank {r} {rows[r][:-1]}" for r in odd) +
+@@ -700,8 +711,17 @@ class GlmEngine:
+             text = read_config(model_dir)
+             g = geometry(text)
+             per_token = max(1, -(-(g.bytes_at(capacity + 65536) - g.bytes_at(capacity)) // 65536))
++            from tensorfold.cuda.geometry import dflash2_window_bytes
++
++            # each kept prompt's DFlash2 window rows beside the pool: 22 MiB as before for incoai's 5 layers, more for
++            # a drafter with more layers or a wider window (TF_GLM_DFLASH_WINDOW)
++            window_bytes = 22 << 20
++            if drafter is not None:
++                dt = read_config(drafter)
++                kvh = tp_mod.split_sizes(int(dt["num_key_value_heads"]), world, 1)[rank]
++                window_bytes = max(window_bytes, dflash2_window_bytes(read_config(drafter), kvh))
+             states = int(os.environ.get("TF_GLM_CACHE_ENTRIES", "8")) * (slot_bytes(text, world, rows=0, rank=rank) // 2 +
+-                                                                          (22 << 20))
++                                                                          window_bytes)
+             # TF_GLM_DISPLAY_KV_MIB: the display reservation's bytes too, which free memory never counted
+             display = display_kv.credit()
+             pool_rows = (capacity + max(0, self.cache_bytes + display - states) // per_token) // ALIGN * ALIGN

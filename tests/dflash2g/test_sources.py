@@ -25,3 +25,9 @@ def test_both_block_passes_apply_the_mask():
         text = (GLM / name).read_text()
         assert "apply_mask_embedding(x, " in text, name
     assert "load_mask_embedding(path, self.mask_id, self.D)" in (GLM / "dflash2.py").read_text()
+
+
+def test_kept_state_reserve_sized_from_the_drafter():
+    text = (GLM / "engine.py").read_text()
+    assert "(22 << 20))" not in text
+    assert "dflash2_window_bytes(read_config(drafter)" in text

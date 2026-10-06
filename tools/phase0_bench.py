@@ -99,11 +99,17 @@ def gate(runs: dict, reference: str = "incoai", threshold: float = 0.9) -> tuple
     return passed, lines
 
 
+def same_reply(a: str | None, b: str | None) -> bool:
+    """Two replies' token hashes match; a reply without one (no "tensorfold" stats) never counts as the same."""
+
+    return a is not None and b is not None and a == b
+
+
 def identity(prompts: list[str]) -> list[dict]:
     out = []
     for p in prompts:
         drafted, serial = ask(p), ask(p, draft=False)
-        out.append({"prompt": p[:60], "same": drafted["token_sha"] == serial["token_sha"],
+        out.append({"prompt": p[:60], "same": same_reply(drafted["token_sha"], serial["token_sha"]),
                     "drafted": drafted["token_sha"], "serial": serial["token_sha"]})
     return out
 

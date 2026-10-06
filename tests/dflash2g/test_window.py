@@ -85,3 +85,12 @@ def test_weights_ignore_owned_copies(tmp_path):
     owned = dflash2_weights(_drafter(tmp_path / "owned", True), 2)
     assert owned.resident == bare.resident
     assert owned.staging == bare.staging
+
+
+def test_kept_window_bytes(monkeypatch, g_cfg, incoai_cfg):
+    from tensorfold.cuda.geometry import dflash2_window_bytes
+
+    assert dflash2_window_bytes(incoai_cfg, 4) == 2 * 5 * 4 * 128 * 2048 * 2          # ~21 MB: under the old 22 MiB
+    assert dflash2_window_bytes(g_cfg, 4) == 32 << 20
+    monkeypatch.setenv("TF_GLM_DFLASH_WINDOW", "8192")
+    assert dflash2_window_bytes(g_cfg, 4) == 128 << 20

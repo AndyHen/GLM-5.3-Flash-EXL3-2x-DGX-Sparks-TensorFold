@@ -36,3 +36,10 @@ def test_gate_fails_when_one_category_short():
 def test_gate_ignores_runs_without_concurrency_4():
     ok, lines = bench.gate({"incoai": _run(100, 200), "g-full": {"prose": {"1": {"agg_tok_s": 50}}}})
     assert not ok and any("g-full" in line and "skipped" in line for line in lines)
+
+
+def test_identity_needs_both_hashes():
+    assert bench.same_reply("ab12", "ab12")
+    assert not bench.same_reply("ab12", "cd34")
+    assert not bench.same_reply(None, None)
+    assert not bench.same_reply("ab12", None)

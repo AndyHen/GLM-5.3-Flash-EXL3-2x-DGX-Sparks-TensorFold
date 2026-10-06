@@ -63,12 +63,26 @@ def test_owned_embedding_equal(tmp_path):
     assert "equal the target's" in check_owned_embedding(_with_embed(tmp_path / "d", table.clone()), table)
 
 
-def test_owned_embedding_differs(tmp_path):
+def test_owned_embedding_differs_warns(tmp_path):
     table = torch.randn(600, 8).to(torch.bfloat16)
     other = table.clone()
     other[599] += 1
-    with pytest.raises(ValueError, match="row 599"):
-        check_owned_embedding(_with_embed(tmp_path / "d", other), table)
+    note = check_owned_embedding(_with_embed(tmp_path / "d", other), table)
+    assert "row 599" in note and "WARNING" in note and "DRAFTER=dflash2" in note
+
+
+def test_truncated_file_named(tmp_path):
+    torch.save({"mask_token_id": MASK, "embedding": torch.zeros(8)}, tmp_path / "mask_embedding.pt")
+    data = (tmp_path / "mask_embedding.pt").read_bytes()
+    (tmp_path / "mask_embedding.pt").write_bytes(data[:len(data) // 2])
+    with pytest.raises(ValueError, match="mask_embedding.pt"):
+        load_mask_embedding(tmp_path, MASK, 8)
+
+
+def test_null_id_named(tmp_path):
+    torch.save({"mask_token_id": None, "embedding": torch.zeros(8)}, tmp_path / "mask_embedding.pt")
+    with pytest.raises(ValueError, match="mask_embedding.pt"):
+        load_mask_embedding(tmp_path, MASK, 8)
 
 
 def test_no_owned_embedding(tmp_path):

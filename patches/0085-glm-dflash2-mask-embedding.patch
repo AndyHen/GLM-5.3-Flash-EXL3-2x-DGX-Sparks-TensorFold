@@ -1,5 +1,5 @@
 diff --git tensorfold/cuda/dflash_compat.py tensorfold/cuda/dflash_compat.py
-index 2331e1b..f0f8476 100644
+index 2331e1b..6bb3c53 100644
 --- tensorfold/cuda/dflash_compat.py
 +++ tensorfold/cuda/dflash_compat.py
 @@ -1,9 +1,11 @@
@@ -15,7 +15,7 @@ index 2331e1b..f0f8476 100644
  
  DEFAULT_WINDOW = 2048            # tokens of context a full-attention drafter attends to unless TF_GLM_DFLASH_WINDOW says
  MIN_WINDOW = 64                  # one attention tile
-@@ -27,3 +29,61 @@ def dflash_window(cfg: dict) -> int:
+@@ -27,3 +29,69 @@ def dflash_window(cfg: dict) -> int:
      if window != 0 and window < MIN_WINDOW:
          raise ValueError(f"TF_GLM_DFLASH_WINDOW is 0 (full attention) or at least {MIN_WINDOW} tokens, not {window}")
      return window
@@ -34,9 +34,16 @@ index 2331e1b..f0f8476 100644
 +        return None
 +    import torch
 +
-+    state = torch.load(path, map_location="cpu", weights_only=True)
++    try:
++        state = torch.load(path, map_location="cpu", weights_only=True)
++    except Exception as exc:                 # truncated, not a torch file, or a pickle weights_only refuses
++        raise ValueError(f"{path} cannot be read as a mask embedding: {exc}") from None
 +    if isinstance(state, dict):
-+        if int(state.get("mask_token_id", mask_id)) != mask_id:
++        try:
++            got = int(state.get("mask_token_id", mask_id))
++        except (TypeError, ValueError):
++            raise ValueError(f"{path}: mask_token_id {state.get('mask_token_id')!r} is not a token id") from None
++        if got != mask_id:
 +            raise ValueError(f"{MASK_FILE}'s mask_token_id {state.get('mask_token_id')} is not the drafter's {mask_id}")
 +        if "embedding" not in state:
 +            raise ValueError(f"{MASK_FILE} holds no 'embedding'")
@@ -55,9 +62,9 @@ index 2331e1b..f0f8476 100644
 +
 +
 +def check_owned_embedding(draft_dir, target_embed, rows=SAMPLE_ROWS) -> str:
-+    """A drafter that ships embed_tokens must ship the target's (the target's are what drafts use): sampled rows are
-+    compared with the target's BF16 table and a difference is refused. Returns a line for the log, "" when the drafter
-+    ships no embedding."""
++    """A drafter that ships embed_tokens is expected to ship the target's (the target's are what drafts use): sampled
++    rows are compared with the target's BF16 table. A difference only costs acceptance (verification keeps replies
++    exact), so it is a warning, not a refusal. Returns a line for the log, "" when the drafter ships no embedding."""
 +
 +    import torch
 +    from safetensors import safe_open
@@ -74,8 +81,9 @@ index 2331e1b..f0f8476 100644
 +            mine = table[r:r + 1].to(torch.bfloat16)
 +            theirs = target_embed[r:r + 1].to("cpu", torch.bfloat16)
 +            if mine.shape != theirs.shape or not torch.equal(mine, theirs):
-+                raise ValueError(f"the drafter's embed_tokens differ from the target's (row {r}): drafter-owned "
-+                                 "embeddings and heads are not supported")
++                return (f"WARNING: the drafter's embed_tokens differ from the target's (row {r}, e.g. modified target "
++                        "weights): drafts use the target's embedding and head, so acceptance may drop; replies stay "
++                        "exact. DRAFTER=dflash2 or mtp avoid it")
 +    return "the drafter's embed_tokens equal the target's (sampled rows): the target's embedding and head are used"
 diff --git tensorfold/families/glm5_next/cuda/dflash2.py tensorfold/families/glm5_next/cuda/dflash2.py
 index 875c656..fb8dbf0 100644
