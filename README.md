@@ -21,8 +21,10 @@ vision, tool calling, `/tokenize` and `/metrics`.
 - Checkpoint: [`Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold`](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold), Mia's AI Lab's own EXL3 quantization (routed experts at 4 bits a weight,
   BF16 elsewhere, ~176 GB), calibrated for how TensorFold serves it
   ([model card](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold))
-- Drafter: [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2), or the checkpoint's
-  own MTP head (`DRAFTER`, see [Configuration](#configuration))
+- Drafter: [`canada-quant/GLM-5.3-Flash-DFlash2-G`](https://huggingface.co/canada-quant/GLM-5.3-Flash-DFlash2-G)
+  (Apache-2.0, default), [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2)
+  (CC BY-NC-ND 4.0, non-commercial, `DRAFTER=dflash2`), or the checkpoint's own MTP head (`DRAFTER=mtp`; see
+  [Configuration](#configuration))
 - API model id: `GLM-5.3-Flash-EXL3`
 - Context: **1,048,576 tokens** a request; the 4 requests share an FP8 KV pool of about **2.9M tokens** (2,922,496 at the measured start)
 - Tool calling, structured outputs (xgrammar), `/tokenize`, and `reasoning_effort` `low` / `high` / `max`
@@ -447,7 +449,7 @@ sets a value wins: the environment, then `scripts/local.sh`, then `.env`, then t
 | `MASTER_PORT` | `29551` | the ranks' rendezvous port (keep it on the private link) |
 | `TP` / `WORKER2` | `2` / empty | Sparks in all (`2`, or `3` through `./start-tp3.sh`), and the ssh target of rank 2 ([3 Sparks](#3-sparks-experimental)); `FABRIC_PEER2`, `WORKER_HF_CACHE2`, `WORKER_WEIGHTS2`, `NFS_SERVER2` as the worker's own |
 | `MASTER_ADDR` / `SOCKET_IFNAME` | see [3 Sparks](#3-sparks-experimental) | the rendezvous address (`TP=2`: the head's address on the link) and, with `TP` above 2, NCCL's bootstrap netdev |
-| `PARALLEL` | `4`, `8` at `TP=3` (`1` with `DRAFTER=mtp`) | requests decoded together, 1 to 8 (above 1 needs `DRAFTER=dflash2`); 8 at once: +27-36% aggregate decode over 4, at a smaller shared pool ([Performance](#performance)) |
+| `PARALLEL` | `4`, `8` at `TP=3` (`1` with `DRAFTER=mtp`) | requests decoded together, 1 to 8 (above 1 needs a DFlash2 drafter); 8 at once: +27-36% aggregate decode over 4, at a smaller shared pool ([Performance](#performance)) |
 | `CONTEXT` | `1048576` | prompt + reply window per request (with `KV=fp8`; other defaults in [KV pool and memory](#kv-pool-and-memory)); `0`: the largest that fits |
 | `KV` | `fp8` | `fp8` or `bf16` (exact, shorter window) DSA latent cache and indexer keys |
 | `WORKER_WEIGHTS` | `copy` | `copy`: the worker keeps its own copy of the weights; `nfs`: it reads the head's over NFS ([Worker weights over NFS](#worker-weights-over-nfs)); with `NFS_PATH`, `NFS_SERVER`, `NFS_VOLUME` |
@@ -455,7 +457,8 @@ sets a value wins: the environment, then `scripts/local.sh`, then `.env`, then t
 | `DISPLAY_KV_MIB` | `0` (off) | MiB of the GPU's display reservation added to the shared pool on every rank (patch 0072, `PARALLEL` above 1; a multiple of 16 up to 2032, 1792 measured): pool tokens without host memory, on top of `KV_POOL_GIB`; needs `/dev/dri/card0`; headless Sparks only (refused while a display is connected) |
 | `DENSE` | `q4` | the checkpoint's BF16 weights (attention, shared experts, dense layers, head): `q4` (4-bit groups of 64, the head in FP8, kv_b in BF16), `fp8` or `bf16`. **Non-English prompts:** `q4` can lose the end of turn on short French coding prompts (replies run to `max_tokens`, issue #18); `fp8` keeps it, at ~10% decode speed |
 | `ABLIT` | `0` | `1`: serve the gated [Ablit weights](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold-Ablit) instead of the published checkpoint; needs `HF_TOKEN` and the terms accepted on the model's page; thinking defaults to off ([Ablit weights](#ablit-weights)) |
-| `DRAFTER` | `dflash2` | `dflash2`: IncoAI's DFlash2 drafter, licensed [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/), **non-commercial use only**; +5-10% decode. `mtp`: the checkpoint's own MTP head, one request at a time, which avoids that license (set it before the first `./start.sh` and DFlash2 is never downloaded) |
+| `DRAFTER` | `dflash2g` | `dflash2g` (default): canada-quant's DFlash2-G drafter, Apache-2.0, 8 full-attention layers served with a `DFLASH_WINDOW`-token window (patches 0084, 0085). `dflash2`: IncoAI's DFlash2 drafter, licensed [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/), **non-commercial use only**. `mtp`: the checkpoint's own MTP head, one request at a time |
+| `DFLASH_WINDOW` | `2048` | context tokens a full-attention drafter (DFlash2-G) attends to; `0`: all of them (`PARALLEL=1` only) |
 | `TF_GLM_MTP` | `auto` | the checkpoint's MTP head beside DFlash2: `auto` leaves it out while DFlash2 drafts every request; `1` (TensorFold v0.6.0's own default) loads it, 1.77 GiB a Spark, with `PARALLEL=1`. `DRAFTER=mtp` always loads it |
 | `TF_GLM_ASSISTANT_ENDS` | `1` | `<\|assistant\|>` ends a reply, like `<\|user\|>` and `<\|observation\|>` (patch 0075, issue #60); `0`: only the checkpoint's own end tokens |
 | `DRAFT_POLICY` | `fnc7:0.3` | how many DFlash2 drafts a round verifies: up to 7, until the drafts' chance under the request's own sampling noise drops below 0.3 |
@@ -570,6 +573,7 @@ applied with `patch -p0` in filename order); `start.sh` rebuilds or re-pulls the
 | Decode, indexer | `0043-glm-visible-pools` | a decode row's token scoring and split selection bounded to the pools it can see (TensorFold v0.6.0 bounds its one-program selection, PR #140) | the same tokens |
 | Link | `0006-cuda-roce-allgather`, `0052-cuda-roce-startup` | the small all-gathers as one-shot RDMA writes over RoCE (`COMM=roce`; up to 512 KiB, `TF_ROCE_MAX_KB`: code at 4 streams +1.4%); until the engine is built, each eager gather first waits for the peer in an NCCL barrier, and the RoCE kernel builds during setup (`TF_ROCE_WAIT_S`, 300 s here; errors print the proxy's counters); an idle rank 1 waiting on a socket is TensorFold v0.6.0's (#132) | 11 us a 16 KiB gather against NCCL's 45, decode +6%; an idle server holds no GPU or CPU core; a first start whose ranks drift apart while building kernels no longer fails |
 | Drafts | `0007-glm-copy-drafts`, `0032-glm-code-copy-drafts`, `0018-glm-noise-policies`, `0021-glm-dflash-policy-env`, `0025-glm-dflash2-ring` | copy (prompt-lookup) drafts ahead of DFlash2's (`COPY`, `COPY_CODE`); DFlash2 stop rules aware of the sampling noise (`DRAFT_POLICY`); kept prompt states' DFlash2 window with shared prefixes (the ring itself and `TF_GLM_MTP` are TensorFold v0.6.0's; the recipe sets `TF_GLM_MTP=auto`, so the MTP head is not loaded when DFlash2 drafts) | `COPY`: quote / edit replies 80.3 -> 84.4 tok/s; `COPY_CODE`: code 55.4 -> 56.2, edit 120 -> 125; `DRAFT_POLICY` over `fc5:0.3`: prose 47.2 -> 50.6 tok/s, code 51.7 -> 55.5; memory for the window |
+| Other DFlash2 drafters | `0084-glm-dflash2-window`, `0085-glm-dflash2-mask-embedding` | a window for full-attention drafters (`TF_GLM_DFLASH_WINDOW`), memory estimates without a drafter's copies of the target's embedding and head, a learned mask embedding (`mask_embedding.pt`) | DFlash2-G with `--parallel` above 1 |
 | Drafts, tooling | `0011-glm-draft-sim` | records of DFlash2's drafts for an offline simulator of stop rules (`TF_GLM_DRAFT_DUMP`, off) | how the stop rules were tuned |
 | Concurrent requests | `0026-glm-multi-kda`, `0027-glm-multi-dflash2`, `0029-glm-multi-dsa`, `0030-glm-multi-stream-engine`, `0035-glm-multi-rounds`, `0040-glm-parallel-deadlocks`, `0041-glm-parallel-ring-base`, `0048-glm-timing-tokens`, `0049-glm-multi-prefill`, `0065-glm-rank-checks` | several streams over one shared pool of per-token caches, one batched verify window a round, both ranks kept in step; prompts that arrive together filled in one forward (`MULTI_PREFILL`: 4 prose requests at once 103.4 -> 108.8 tok/s, first token 590 -> 340 ms); a request alone on the one-stream graphs (`TF_GLM_MULTI_LONE=1`, off by default since v1.3.1: +0.6-0.9%); the startup timings of verify windows on distinct tokens | 4 requests at once ([Performance](#performance)) |
 | Sampling | `0034-cuda-nucleus-union` | a top_p draw from both ranks' candidates together, the same draw with fewer whole-shard reads (`TENSORFOLD_NUCLEUS_UNION=1`, off by default) | opt-in |
@@ -670,8 +674,10 @@ files are downloaded from Hugging Face and are not part of this repository:
 - **The checkpoint** [`Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold`](https://huggingface.co/Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold) is under the Apache License 2.0; the base model it derives from is MIT-licensed by Z.AI.
 - **The base model** [GLM-5.3-Flash](https://huggingface.co/zai-org/GLM-5.3-Flash) is under the license on its model
   card.
-- **The DFlash2 drafter** is under [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/),
-  non-commercial use only (commercial licensing: contact@inco.ai); `DRAFTER=mtp` serves without it.
+- **The DFlash2-G drafter** (default) is under the Apache License 2.0 by canada-quant; its card lists the public
+  prompt sets it was trained with, which carry their own terms.
+- **The incoai DFlash2 drafter** (opt-in, `DRAFTER=dflash2`) is under [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/),
+  non-commercial use only (commercial licensing: contact@inco.ai); the default `DRAFTER=dflash2g` serves without it.
 
 **Third-party software in the image.** The prebuilt image (and the one `scripts/prepare.sh` builds) is based on
 NVIDIA's PyTorch container `nvcr.io/nvidia/pytorch:26.07-py3`, redistributed as a value-added runtime image. The NVIDIA

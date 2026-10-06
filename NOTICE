@@ -116,7 +116,10 @@ Model files (downloaded from Hugging Face by scripts/prepare.sh; not included in
 
   The base model, zai-org/GLM-5.3-Flash, is under the license on its model card.
   The DFlash2 drafter, incoai/GLM-5.3-Flash-DFlash2, is licensed CC BY-NC-ND 4.0: non-commercial use only, no
-  derivatives (commercial licensing: contact@inco.ai, per its model card). DRAFTER=mtp serves without it.
+  derivatives (commercial licensing: contact@inco.ai, per its model card). It is opt-in (DRAFTER=dflash2); the
+  default DRAFTER=dflash2g and DRAFTER=mtp serve without it.
+  The DFlash2-G drafter, canada-quant/GLM-5.3-Flash-DFlash2-G, is licensed under the Apache License 2.0 by
+  canada-quant. Downloaded at setup, not redistributed in this repository.
 
 Third-party software in the image
   The prebuilt image (and the one scripts/prepare.sh builds) is based on NVIDIA's PyTorch container

@@ -26,7 +26,10 @@ checkpoint's ShapleyMcg attribution and the drafter's license).
   > this attribution is unlicensed.
 - **[IncoAI](https://huggingface.co/incoai)**: the DFlash2 drafter,
   [`incoai/GLM-5.3-Flash-DFlash2`](https://huggingface.co/incoai/GLM-5.3-Flash-DFlash2) (**CC BY-NC-ND 4.0**:
-  non-commercial use, no derivatives). Downloaded from its source, never redistributed here.
+  non-commercial use, no derivatives). Downloaded from its source, never redistributed here. Opt-in in this fork.
+- **[canada-quant](https://huggingface.co/canada-quant)**: the default DFlash2 drafter,
+  [`canada-quant/GLM-5.3-Flash-DFlash2-G`](https://huggingface.co/canada-quant/GLM-5.3-Flash-DFlash2-G)
+  (**Apache-2.0**). Downloaded from its source, never redistributed here.
 
 ## Inference engine
 

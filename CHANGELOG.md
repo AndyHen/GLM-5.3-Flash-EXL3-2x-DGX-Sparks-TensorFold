@@ -3,6 +3,14 @@
 Every change to this recipe, newest first. Each release names the image it serves: `scripts/prepare.sh` pulls
 `ghcr.io/miaai-lab/glm-5.3-flash-exl3-2x-dgx-sparks-tensorfold` by the digest pinned in `scripts/config.sh`.
 
+## dflash2g (fork of v1.8)
+
+- DFlash2-G (canada-quant, Apache-2.0) is the default drafter: `DRAFTER=dflash2g`; incoai's stays opt-in
+  (`DRAFTER=dflash2`). Patches 0084 (`TF_GLM_DFLASH_WINDOW`, memory estimates) and 0085 (mask embedding).
+- `DFLASH_WINDOW` (default 2048, pending Phase 0).
+- `tools/phase0.sh`, `tools/phase0_bench.py`: G against incoai, drafted == serial (`docs/PHASE0.md`).
+- No published image yet: `scripts/prepare.sh` builds it locally.
+
 ## v1.8 (2026-10-06): pictures read once, quoted markers, capacity refusals, and the take-over memory fix
 
 Image: `v0.6.0-31557ed1cef6` (`sha256:cbb4b3c66273e2965dd40a7227e7a5243db333fe250113fb3987462ad4f12588`), 82 patches, for two and three Sparks (v1.7.1's plus `0078`-`0083`). Every change below was also
